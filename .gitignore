@@ -1,0 +1,24 @@
+# Binaries and build artifacts
+ClipboardRegexReplace
+ClipboardRegexReplace.exe
+ClipboardRegexReplace.exe~
+
+# Log files
+clipboard_regex_replace.log
+
+# Local configuration file
+config.json
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Editor backup and temporary files
+*~
+
+# Go build artifacts
+*.o
+*.obj
+
+# Dependency directories (if you ever vendor dependencies)
+vendor/

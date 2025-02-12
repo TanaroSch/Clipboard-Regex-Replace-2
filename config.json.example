@@ -1,0 +1,14 @@
+{
+  "hotkey": "ctrl+alt+v",
+  "use_notifications": true,
+  "replacements": [
+    {
+      "regex": "(?i)name[s]?[/\\\\]",
+      "replace_with": ""
+    },
+    {
+      "regex": "example_pattern",
+      "replace_with": "example_replacement"
+    }
+  ]
+}

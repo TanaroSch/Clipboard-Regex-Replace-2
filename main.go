@@ -196,11 +196,14 @@ func replaceClipboardText() {
 func pasteClipboardContent() {
 	switch runtime.GOOS {
 	case "windows":
-		cmd := exec.Command("powershell", "-command", "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^v')")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		if err := cmd.Run(); err != nil {
-			log.Printf("Failed to simulate paste on Windows: %v", err)
-		}
+		keyboard := syscall.NewLazyDLL("user32.dll")
+		keybd_event := keyboard.NewProc("keybd_event")
+
+		// VK_CONTROL = 0x11, VK_V = 0x56
+		keybd_event.Call(0x11, 0, 0, 0) // Press Ctrl
+		keybd_event.Call(0x56, 0, 0, 0) // Press V
+		keybd_event.Call(0x56, 0, 2, 0) // Release V
+		keybd_event.Call(0x11, 0, 2, 0) // Release Ctrl
 	case "linux":
 		if err := exec.Command("xdotool", "key", "ctrl+v").Run(); err != nil {
 			log.Printf("Failed to simulate paste on Linux: %v", err)

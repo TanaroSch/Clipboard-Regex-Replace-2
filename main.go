@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -187,7 +188,7 @@ func replaceClipboardText() {
 	}
 
 	// Short delay to allow clipboard update.
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 	pasteClipboardContent()
 }
 
@@ -211,6 +212,38 @@ func pasteClipboardContent() {
 	default:
 		log.Println("Automatic paste not supported on this platform.")
 	}
+}
+
+// parseHotkey converts a string hotkey combination (e.g., "ctrl+alt+v")
+// into hotkey modifiers and key
+func parseHotkey(hotkeyStr string) ([]hotkey.Modifier, hotkey.Key, error) {
+	parts := strings.Split(strings.ToLower(hotkeyStr), "+")
+	var modifiers []hotkey.Modifier
+
+	// Get the key (last part)
+	keyStr := parts[len(parts)-1]
+	key, exists := KeyMap[keyStr]
+	if !exists {
+		return nil, 0, fmt.Errorf("unsupported key: %s", keyStr)
+	}
+
+	// Parse modifiers (all parts except the last)
+	for _, part := range parts[:len(parts)-1] {
+		switch part {
+		case "ctrl":
+			modifiers = append(modifiers, hotkey.ModCtrl)
+		case "alt":
+			modifiers = append(modifiers, hotkey.ModAlt)
+		case "shift":
+			modifiers = append(modifiers, hotkey.ModShift)
+		case "super", "win", "cmd":
+			modifiers = append(modifiers, hotkey.ModWin)
+		default:
+			return nil, 0, fmt.Errorf("unsupported modifier: %s", part)
+		}
+	}
+
+	return modifiers, key, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -238,8 +271,15 @@ func onReady() {
 	// Add a Quit menu item.
 	mQuit := systray.AddMenuItem("Quit", "Exit the application")
 
-	// Register the global hotkey (assumed "ctrl+alt+v").
-	hk := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl, hotkey.ModAlt}, hotkey.KeyV)
+	// Parse the hotkey from config
+	modifiers, key, err := parseHotkey(config.Hotkey)
+	if err != nil {
+		log.Fatalf("Failed to parse hotkey configuration: %v", err)
+	}
+	// Register the global hotkey hardcoded (assumed "ctrl+alt+v").
+	// hk := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl, hotkey.ModAlt}, hotkey.KeyV)
+	// Register the hotkey using the parsed configuration
+	hk := hotkey.New(modifiers, key)
 	if err := hk.Register(); err != nil {
 		log.Fatalf("Failed to register hotkey: %v", err)
 	}

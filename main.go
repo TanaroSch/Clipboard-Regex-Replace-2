@@ -24,7 +24,7 @@ import (
 	"golang.design/x/hotkey"
 )
 
-const version = "v1.0.0" // Application version
+const version = "v1.1.0" // Application version
 
 // ---------------------------------------------------------------------------
 // 1. Embed the icon.ico for the tray and EXE icon.

@@ -111,6 +111,17 @@ To build a Windows executable without a console windowr un the following command
 - [github.com/go-toast/toast](https://github.com/go-toast/toast) – Windows toast notifications.
 - [golang.design/x/hotkey](https://pkg.go.dev/golang.design/x/hotkey) – Global hotkey registration.
 
+## Changelog
+
+### 1.1.0
+- custom hotkey
+
+### 1.0.0
+- initial project
+- basic regex replacement
+- toast notification
+
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

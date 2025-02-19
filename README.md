@@ -15,11 +15,14 @@ Clipboard Regex Replace is a fast, standalone clipboard filtering application wr
 - **Clipboard Automation:**  
   Automatically updates your clipboard content and simulates a paste.
 
+- **Temporary Clipboard Storage:**  
+  Optionally store the original clipboard text before processing and automatically revert it after pasting. You can also choose to keep the replaced text using the system tray menu options or Windows toast notification actions (if supported).
+
 - **Windows Toast Notifications:**  
-  Displays a toast notification to show succesfull replacement.
+  Displays a toast notification to show successful replacement and notify about temporary clipboard reversion.
 
 - **System Tray Icon:**  
-  Runs in the background with a system tray icon and provides a menu for quick exit.
+  Runs in the background with a system tray icon and provides a menu for quick exit and managing clipboard reversion.
 
 - **Standalone Executable:**  
   Easily build and distribute a single EXE file on Windows (with external configuration files).
@@ -54,6 +57,8 @@ The application reads its configuration from an external `config.json` file. Cre
 {
   "hotkey": "ctrl+alt+v",
   "use_notifications": true,
+  "temporary_clipboard": true,
+  "reversion_timeout": 10,
   "replacements": [
     {
       "regex": "(?i)mypassword",
@@ -69,6 +74,8 @@ The application reads its configuration from an external `config.json` file. Cre
 
 - **hotkey:** The global hotkey to trigger the filtering.
 - **use_notifications:** Set to `true` to enable desktop notifications.
+- **temporary_clipboard:** Set to `true` to enable storing the original clipboard text. When enabled, the replaced clipboard text is pasted, and the original text is automatically restored after a timeout unless you choose otherwise from the tray menu or notification actions.
+- **reversion_timeout:** The number of seconds to wait before automatically reverting the clipboard to its original content (default is 10 seconds if not specified).
 - **replacements:** An array of regex rules with their corresponding replacement text.
 
 ## Usage
@@ -89,19 +96,20 @@ The application reads its configuration from an external `config.json` file. Cre
    - Update the clipboard.
    - Simulate a paste action.
    - Display a toast notification (on Windows) indicating the number of replacements performed.
+   - If enabled, temporarily store the original clipboard content and revert it automatically after 10 seconds (unless you choose to keep the replaced text via the tray menu or notification action).
 
 3. **Exiting the Application:**  
    Right-click the system tray icon and select **Quit** to exit.
 
 ## Building for Windows
 
-To build a Windows executable without a console windowr un the following command:
+To build a Windows executable without a console window, run the following command:
 
-   ```bash
-   go build -ldflags="-H=windowsgui" -o ClipboardRegexReplace.exe main.go
-   ```
+```bash
+go build -ldflags="-H=windowsgui" -o ClipboardRegexReplace.exe main.go
+```
 
-   Distribute the resulting `ClipboardRegexReplace.exe` along with the external files `config.json` and optionally `icon.png`. Optionally a shortcut of the `ClipboardRegexReplace.exe` can be placed in the startup folder.
+Distribute the resulting `ClipboardRegexReplace.exe` along with the external files `config.json` and optionally `icon.png`. Optionally, a shortcut of the `ClipboardRegexReplace.exe` can be placed in the startup folder.
 
 ## Dependencies
 
@@ -113,14 +121,19 @@ To build a Windows executable without a console windowr un the following command
 
 ## Changelog
 
+### 1.2.0
+- **Temporary Clipboard Storage:**  
+  Optionally store the original clipboard text before applying regex replacements. The replaced clipboard is pasted, and the original text is automatically restored after 10 seconds unless the user chooses to keep the replaced text.
+- **Interactive Options:**  
+  Added system tray menu items (and toast notification prompts on Windows) to allow users to revert to the original clipboard text or keep the replaced text.
+  
 ### 1.1.0
-- custom hotkey
-
+- Custom hotkey configuration.
+  
 ### 1.0.0
-- initial project
-- basic regex replacement
-- toast notification
-
+- Initial project.
+- Basic regex replacement.
+- Toast notification.
 
 ## License
 

@@ -1,6 +1,8 @@
 {
   "hotkey": "ctrl+alt+v",
   "use_notifications": true,
+  "temporary_clipboard": true,
+  "reversion_timeout": 10,
   "replacements": [
     {
       "regex": "(?i)name[s]?[/\\\\]",

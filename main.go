@@ -24,7 +24,7 @@ import (
 	"golang.design/x/hotkey"
 )
 
-const version = "v1.1.0" // Application version
+const version = "v1.2.0" // Application version
 
 // ---------------------------------------------------------------------------
 // 1. Embed the icon.ico for the tray and EXE icon.
@@ -58,9 +58,11 @@ func writeTempIcon() (string, error) {
 
 // Config holds the application configuration loaded from config.json.
 type Config struct {
-	Hotkey           string        `json:"hotkey"`            // e.g. "ctrl+alt+v"
-	UseNotifications bool          `json:"use_notifications"` // true/false
-	Replacements     []Replacement `json:"replacements"`
+	Hotkey             string        `json:"hotkey"`              // e.g. "ctrl+alt+v"
+	UseNotifications   bool          `json:"use_notifications"`   // true/false
+	TemporaryClipboard bool          `json:"temporary_clipboard"` // enable storing the original clipboard temporarily
+	ReversionTimeout   int           `json:"reversion_timeout"`   // reversion timeout in seconds (optional, default: 10)
+	Replacements       []Replacement `json:"replacements"`
 }
 
 // Replacement represents one regex replacement rule.
@@ -98,7 +100,6 @@ func showNotification(title, message string) {
 
 		// Try to use external icon.png for better quality.
 		if _, err := os.Stat("icon.png"); err == nil {
-			// Get absolute path.
 			wd, err := os.Getwd()
 			if err != nil {
 				iconPathForToast = "icon.png"
@@ -120,7 +121,7 @@ func showNotification(title, message string) {
 		}
 
 		notification := toast.Notification{
-			AppID:   "Clipboard Regex Replace", // Make sure this matches a registered AppUserModelID if needed.
+			AppID:   "Clipboard Regex Replace", // Ensure this matches a registered AppUserModelID if needed.
 			Title:   title,
 			Message: message,
 			Icon:    iconPathForToast,
@@ -141,17 +142,36 @@ func showNotification(title, message string) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Clipboard Processing & Paste Simulation
+// 4. Clipboard Processing, Temporary Storage & Paste Simulation
 // ---------------------------------------------------------------------------
+
+// Global variables for temporary clipboard handling.
+var previousClipboard string
+var revertTimer *time.Timer
+
+// Systray menu items for interactive action.
+var miRevert, miKeep *systray.MenuItem
 
 // replaceClipboardText reads the clipboard text, applies regex replacements,
 // updates the clipboard, shows a notification (if replacements occurred),
 // and simulates a paste action.
+// If the TemporaryClipboard option is enabled, it stores the original text,
+// and starts a timer to revert the clipboard unless the user chooses otherwise.
 func replaceClipboardText() {
 	origText, err := clipboard.ReadAll()
 	if err != nil {
 		log.Printf("Failed to read clipboard: %v", err)
 		return
+	}
+
+	// If temporary clipboard functionality is enabled, store the original text.
+	if config.TemporaryClipboard {
+		previousClipboard = origText
+		// Enable interactive systray options.
+		if miRevert != nil && miKeep != nil {
+			miRevert.Enable()
+			miKeep.Enable()
+		}
 	}
 
 	newText := origText
@@ -173,7 +193,7 @@ func replaceClipboardText() {
 		newText = re.ReplaceAllString(newText, rep.ReplaceWith)
 	}
 
-	// Update the clipboard.
+	// Update the clipboard with the replaced text.
 	if err := clipboard.WriteAll(newText); err != nil {
 		log.Printf("Failed to write to clipboard: %v", err)
 		return
@@ -182,7 +202,13 @@ func replaceClipboardText() {
 	// Notify only if replacements were made.
 	if totalReplacements > 0 {
 		log.Printf("Clipboard updated with %d replacements.", totalReplacements)
-		showNotification("Clipboard Updated", fmt.Sprintf("%d replacements done", totalReplacements))
+		if config.TemporaryClipboard {
+			showNotification("Clipboard Updated",
+				fmt.Sprintf("%d replacements done. Original text will be restored in %d seconds unless you choose an option from the tray.", totalReplacements, getReversionTimeout()))
+			startReversionTimer()
+		} else {
+			showNotification("Clipboard Updated", fmt.Sprintf("%d replacements done", totalReplacements))
+		}
 	} else {
 		log.Println("No regex replacements applied; no notification sent.")
 	}
@@ -193,13 +219,12 @@ func replaceClipboardText() {
 }
 
 // pasteClipboardContent simulates a paste action.
-// On Windows, it uses a PowerShell command with a hidden window.
+// On Windows, it uses the user32.dll keybd_event API.
 func pasteClipboardContent() {
 	switch runtime.GOOS {
 	case "windows":
 		keyboard := syscall.NewLazyDLL("user32.dll")
 		keybd_event := keyboard.NewProc("keybd_event")
-
 		// VK_CONTROL = 0x11, VK_V = 0x56
 		keybd_event.Call(0x11, 0, 0, 0) // Press Ctrl
 		keybd_event.Call(0x56, 0, 0, 0) // Press V
@@ -214,8 +239,57 @@ func pasteClipboardContent() {
 	}
 }
 
+// getReversionTimeout returns the reversion timeout (in seconds) specified in the config,
+// or the default value of 10 seconds if not set or invalid.
+func getReversionTimeout() int {
+	if config.ReversionTimeout > 0 {
+		return config.ReversionTimeout
+	}
+	return 10
+}
+
+// startReversionTimer starts a timer that will automatically restore the
+// original clipboard content after the specified timeout if no user action is taken.
+func startReversionTimer() {
+	timeout := time.Duration(getReversionTimeout()) * time.Second
+	revertTimer = time.AfterFunc(timeout, func() {
+		log.Println("Reversion timer expired; restoring original clipboard content.")
+		restoreOriginalClipboard()
+	})
+}
+
+// cancelReversionTimer stops the reversion timer.
+func cancelReversionTimer() {
+	if revertTimer != nil {
+		revertTimer.Stop()
+		revertTimer = nil
+	}
+}
+
+// restoreOriginalClipboard reverts the clipboard to its previous content.
+func restoreOriginalClipboard() {
+	if previousClipboard != "" {
+		if err := clipboard.WriteAll(previousClipboard); err != nil {
+			log.Printf("Failed to restore original clipboard: %v", err)
+		} else {
+			log.Println("Original clipboard content restored.")
+			showNotification("Clipboard Reverted", "The original clipboard text has been restored.")
+		}
+		// Disable interactive systray items once action is taken.
+		if config.TemporaryClipboard && miRevert != nil && miKeep != nil {
+			miRevert.Disable()
+			miKeep.Disable()
+		}
+		previousClipboard = ""
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 5. Global Hotkey Setup & Systray Menu
+// ---------------------------------------------------------------------------
+
 // parseHotkey converts a string hotkey combination (e.g., "ctrl+alt+v")
-// into hotkey modifiers and key
+// into hotkey modifiers and key.
 func parseHotkey(hotkeyStr string) ([]hotkey.Modifier, hotkey.Key, error) {
 	parts := strings.Split(strings.ToLower(hotkeyStr), "+")
 	var modifiers []hotkey.Modifier
@@ -246,10 +320,6 @@ func parseHotkey(hotkeyStr string) ([]hotkey.Modifier, hotkey.Key, error) {
 	return modifiers, key, nil
 }
 
-// ---------------------------------------------------------------------------
-// 5. Systray & Global Hotkey Setup
-// ---------------------------------------------------------------------------
-
 // onReady is called by systray once the tray is ready.
 func onReady() {
 	// Set title and tooltip including version.
@@ -260,25 +330,48 @@ func onReady() {
 
 	// Add a disabled version menu item.
 	miVersion := systray.AddMenuItem(fmt.Sprintf("Version: %s", version), "Clipboard Regex Replace version")
-	// We don't need to listen for clicks on the version item.
-	// (It serves as an informational label.)
 	go func() {
-		for {
-			<-miVersion.ClickedCh
+		for range miVersion.ClickedCh {
+			// Informational only.
 		}
 	}()
 
 	// Add a Quit menu item.
 	mQuit := systray.AddMenuItem("Quit", "Exit the application")
 
-	// Parse the hotkey from config
+	// If temporary clipboard functionality is enabled, add extra menu items.
+	if config.TemporaryClipboard {
+		miRevert = systray.AddMenuItem("Revert Clipboard", "Revert to original clipboard text")
+		miKeep = systray.AddMenuItem("Keep Replaced Text", "Keep the replaced clipboard text")
+		miRevert.Disable()
+		miKeep.Disable()
+
+		// Listen for clicks on "Revert Clipboard"
+		go func() {
+			for range miRevert.ClickedCh {
+				cancelReversionTimer()
+				restoreOriginalClipboard()
+			}
+		}()
+		// Listen for clicks on "Keep Replaced Text"
+		go func() {
+			for range miKeep.ClickedCh {
+				cancelReversionTimer()
+				log.Println("User chose to keep replaced text.")
+				if miRevert != nil && miKeep != nil {
+					miRevert.Disable()
+					miKeep.Disable()
+				}
+			}
+		}()
+	}
+
+	// Parse the hotkey from config.
 	modifiers, key, err := parseHotkey(config.Hotkey)
 	if err != nil {
 		log.Fatalf("Failed to parse hotkey configuration: %v", err)
 	}
-	// Register the global hotkey hardcoded (assumed "ctrl+alt+v").
-	// hk := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl, hotkey.ModAlt}, hotkey.KeyV)
-	// Register the hotkey using the parsed configuration
+	// Register the hotkey using the parsed configuration.
 	hk := hotkey.New(modifiers, key)
 	if err := hk.Register(); err != nil {
 		log.Fatalf("Failed to register hotkey: %v", err)

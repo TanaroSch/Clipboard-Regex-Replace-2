@@ -71,6 +71,8 @@ The application reads its configuration from an external `config.json` file. Cre
 - **use_notifications:** Set to `true` to enable desktop notifications.
 - **replacements:** An array of regex rules with their corresponding replacement text.
 
+> **Important Warning:** Replacements are processed sequentially in the order they appear in the configuration file. This means the order of your regex rules matters! Earlier replacements can affect the text that later replacements operate on. Consider this carefully when organizing your replacement rules to avoid unexpected results.
+
 ## Usage
 
 1. **Running the Application:**  

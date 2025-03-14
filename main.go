@@ -24,7 +24,7 @@ import (
 	"golang.design/x/hotkey"
 )
 
-const version = "v1.3.0" // Application version
+const version = "v1.3.1" // Application version
 
 // ---------------------------------------------------------------------------
 // 1. Embed the icon.ico for the tray and EXE icon.
@@ -159,26 +159,25 @@ var hk *hotkey.Hotkey
 // and simulates a paste action.
 // If the TemporaryClipboard option is enabled, it stores the original text
 // until the user manually reverts it.
+// Track clipboard transformations
+var lastTransformedClipboard string // Stores the most recent text placed in clipboard after transformation
+
 func replaceClipboardText() {
+	// Read the current clipboard content
 	origText, err := clipboard.ReadAll()
 	if err != nil {
 		log.Printf("Failed to read clipboard: %v", err)
 		return
 	}
 
-	// If temporary clipboard functionality is enabled, store the original text.
-	if config.TemporaryClipboard {
-		previousClipboard = origText
-		// Enable the revert option in systray.
-		if miRevert != nil {
-			miRevert.Enable()
-		}
-	}
+	// Determine if this is new content or our previously transformed content
+	isNewContent := lastTransformedClipboard == "" || origText != lastTransformedClipboard
 
+	// Start with original text for transformation
 	newText := origText
 	totalReplacements := 0
 
-	// Apply each regex replacement rule.
+	// Apply each regex replacement rule
 	for _, rep := range config.Replacements {
 		re, err := regexp.Compile(rep.Regex)
 		if err != nil {
@@ -186,7 +185,7 @@ func replaceClipboardText() {
 			continue
 		}
 
-		// Count matches before replacement.
+		// Count matches before replacement
 		matches := re.FindAllStringIndex(newText, -1)
 		if matches != nil {
 			totalReplacements += len(matches)
@@ -194,13 +193,27 @@ func replaceClipboardText() {
 		newText = re.ReplaceAllString(newText, rep.ReplaceWith)
 	}
 
-	// Update the clipboard with the replaced text.
+	// Store original clipboard text only when:
+	// 1. The user has copied new content, or
+	// 2. This is the first run and previousClipboard is empty
+	if config.TemporaryClipboard && (isNewContent || previousClipboard == "") {
+		previousClipboard = origText
+		// Enable the revert option in systray
+		if miRevert != nil {
+			miRevert.Enable()
+		}
+	}
+
+	// Update the clipboard with the replaced text
 	if err := clipboard.WriteAll(newText); err != nil {
 		log.Printf("Failed to write to clipboard: %v", err)
 		return
 	}
 
-	// Notify only if replacements were made.
+	// Track what was just placed in the clipboard
+	lastTransformedClipboard = newText
+
+	// Notify only if replacements were made
 	if totalReplacements > 0 {
 		log.Printf("Clipboard updated with %d replacements.", totalReplacements)
 		if config.TemporaryClipboard {
@@ -218,11 +231,11 @@ func replaceClipboardText() {
 		log.Println("No regex replacements applied; no notification sent.")
 	}
 
-	// Short delay to allow clipboard update.
+	// Short delay to allow clipboard update
 	time.Sleep(20 * time.Millisecond)
 	pasteClipboardContent()
 
-	// NEW: Handle automatic reversion after paste if enabled
+	// Handle automatic reversion after paste if enabled
 	if config.TemporaryClipboard && config.AutomaticReversion && previousClipboard != "" {
 		// Give a small delay after paste to ensure the paste operation completes
 		time.Sleep(50 * time.Millisecond)
@@ -232,11 +245,6 @@ func replaceClipboardText() {
 			log.Printf("Failed to automatically restore original clipboard: %v", err)
 		} else {
 			log.Println("Original clipboard content automatically restored after paste.")
-			// showNotification("Clipboard Automatically Reverted", "Original clipboard content has been restored.")
-
-			// Note: We don't clear previousClipboard or disable the revert menu item
-			// This allows the user to still manually revert if needed (in case the automatic
-			// reversion somehow fails or they want to paste the original again)
 		}
 	}
 }

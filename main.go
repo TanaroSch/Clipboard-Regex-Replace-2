@@ -24,7 +24,7 @@ import (
 	"golang.design/x/hotkey"
 )
 
-const version = "v1.2.0" // Application version
+const version = "v1.3.0" // Application version
 
 // ---------------------------------------------------------------------------
 // 1. Embed the icon.ico for the tray and EXE icon.
@@ -61,7 +61,7 @@ type Config struct {
 	Hotkey             string        `json:"hotkey"`              // e.g. "ctrl+alt+v"
 	UseNotifications   bool          `json:"use_notifications"`   // true/false
 	TemporaryClipboard bool          `json:"temporary_clipboard"` // enable storing the original clipboard temporarily
-	ReversionTimeout   int           `json:"reversion_timeout"`   // reversion timeout in seconds (optional, default: 10)
+	AutomaticReversion bool          `json:"automatic_reversion"` // automatically revert clipboard after pasting
 	Replacements       []Replacement `json:"replacements"`
 }
 
@@ -147,16 +147,18 @@ func showNotification(title, message string) {
 
 // Global variables for temporary clipboard handling.
 var previousClipboard string
-var revertTimer *time.Timer
 
-// Systray menu items for interactive action.
-var miRevert, miKeep *systray.MenuItem
+// Systray menu item for interactive action.
+var miRevert *systray.MenuItem
+
+// Store the global hotkey reference for reloading config
+var hk *hotkey.Hotkey
 
 // replaceClipboardText reads the clipboard text, applies regex replacements,
 // updates the clipboard, shows a notification (if replacements occurred),
 // and simulates a paste action.
-// If the TemporaryClipboard option is enabled, it stores the original text,
-// and starts a timer to revert the clipboard unless the user chooses otherwise.
+// If the TemporaryClipboard option is enabled, it stores the original text
+// until the user manually reverts it.
 func replaceClipboardText() {
 	origText, err := clipboard.ReadAll()
 	if err != nil {
@@ -167,10 +169,9 @@ func replaceClipboardText() {
 	// If temporary clipboard functionality is enabled, store the original text.
 	if config.TemporaryClipboard {
 		previousClipboard = origText
-		// Enable interactive systray options.
-		if miRevert != nil && miKeep != nil {
+		// Enable the revert option in systray.
+		if miRevert != nil {
 			miRevert.Enable()
-			miKeep.Enable()
 		}
 	}
 
@@ -203,9 +204,13 @@ func replaceClipboardText() {
 	if totalReplacements > 0 {
 		log.Printf("Clipboard updated with %d replacements.", totalReplacements)
 		if config.TemporaryClipboard {
-			showNotification("Clipboard Updated",
-				fmt.Sprintf("%d replacements done. Original text will be restored in %d seconds unless you choose an option from the tray.", totalReplacements, getReversionTimeout()))
-			startReversionTimer()
+			if config.AutomaticReversion {
+				showNotification("Clipboard Updated",
+					fmt.Sprintf("%d replacements done. Clipboard will be automatically reverted after paste.", totalReplacements))
+			} else {
+				showNotification("Clipboard Updated",
+					fmt.Sprintf("%d replacements done. Original text stored for manual reversion via tray menu.", totalReplacements))
+			}
 		} else {
 			showNotification("Clipboard Updated", fmt.Sprintf("%d replacements done", totalReplacements))
 		}
@@ -216,6 +221,24 @@ func replaceClipboardText() {
 	// Short delay to allow clipboard update.
 	time.Sleep(20 * time.Millisecond)
 	pasteClipboardContent()
+
+	// NEW: Handle automatic reversion after paste if enabled
+	if config.TemporaryClipboard && config.AutomaticReversion && previousClipboard != "" {
+		// Give a small delay after paste to ensure the paste operation completes
+		time.Sleep(50 * time.Millisecond)
+
+		// Restore original clipboard
+		if err := clipboard.WriteAll(previousClipboard); err != nil {
+			log.Printf("Failed to automatically restore original clipboard: %v", err)
+		} else {
+			log.Println("Original clipboard content automatically restored after paste.")
+			// showNotification("Clipboard Automatically Reverted", "Original clipboard content has been restored.")
+
+			// Note: We don't clear previousClipboard or disable the revert menu item
+			// This allows the user to still manually revert if needed (in case the automatic
+			// reversion somehow fails or they want to paste the original again)
+		}
+	}
 }
 
 // pasteClipboardContent simulates a paste action.
@@ -239,33 +262,6 @@ func pasteClipboardContent() {
 	}
 }
 
-// getReversionTimeout returns the reversion timeout (in seconds) specified in the config,
-// or the default value of 10 seconds if not set or invalid.
-func getReversionTimeout() int {
-	if config.ReversionTimeout > 0 {
-		return config.ReversionTimeout
-	}
-	return 10
-}
-
-// startReversionTimer starts a timer that will automatically restore the
-// original clipboard content after the specified timeout if no user action is taken.
-func startReversionTimer() {
-	timeout := time.Duration(getReversionTimeout()) * time.Second
-	revertTimer = time.AfterFunc(timeout, func() {
-		log.Println("Reversion timer expired; restoring original clipboard content.")
-		restoreOriginalClipboard()
-	})
-}
-
-// cancelReversionTimer stops the reversion timer.
-func cancelReversionTimer() {
-	if revertTimer != nil {
-		revertTimer.Stop()
-		revertTimer = nil
-	}
-}
-
 // restoreOriginalClipboard reverts the clipboard to its previous content.
 func restoreOriginalClipboard() {
 	if previousClipboard != "" {
@@ -273,14 +269,14 @@ func restoreOriginalClipboard() {
 			log.Printf("Failed to restore original clipboard: %v", err)
 		} else {
 			log.Println("Original clipboard content restored.")
-			showNotification("Clipboard Reverted", "The original clipboard text has been restored.")
+			showNotification("Clipboard Reverted", "Original clipboard content has been restored.")
 		}
-		// Disable interactive systray items once action is taken.
-		if config.TemporaryClipboard && miRevert != nil && miKeep != nil {
-			miRevert.Disable()
-			miKeep.Disable()
-		}
+
+		// Clear the previous clipboard and disable the revert option
 		previousClipboard = ""
+		if miRevert != nil {
+			miRevert.Disable()
+		}
 	}
 }
 
@@ -320,6 +316,47 @@ func parseHotkey(hotkeyStr string) ([]hotkey.Modifier, hotkey.Key, error) {
 	return modifiers, key, nil
 }
 
+// reloadConfig reloads the configuration from config.json
+func reloadConfig() {
+	log.Println("Reloading configuration...")
+	if err := loadConfig(); err != nil {
+		log.Printf("Error reloading configuration: %v", err)
+		showNotification("Configuration Error", "Failed to reload configuration. Check logs for details.")
+	} else {
+		log.Println("Configuration reloaded successfully.")
+		showNotification("Configuration Reloaded", "Configuration has been updated successfully.")
+
+		// Unregister the existing hotkey
+		if hk != nil {
+			hk.Unregister()
+		}
+
+		// Register a new hotkey with the updated configuration
+		modifiers, key, err := parseHotkey(config.Hotkey)
+		if err != nil {
+			log.Printf("Failed to parse new hotkey configuration: %v", err)
+			showNotification("Hotkey Error", "Failed to register new hotkey. Check logs for details.")
+		} else {
+			// Register new hotkey
+			hk = hotkey.New(modifiers, key)
+			if err := hk.Register(); err != nil {
+				log.Printf("Failed to register new hotkey: %v", err)
+				showNotification("Hotkey Error", "Failed to register new hotkey. Check logs for details.")
+			} else {
+				log.Printf("New hotkey registered: %s", config.Hotkey)
+
+				// Listen for hotkey events
+				go func() {
+					for range hk.Keydown() {
+						log.Println("Hotkey pressed. Processing clipboard text...")
+						replaceClipboardText()
+					}
+				}()
+			}
+		}
+	}
+}
+
 // onReady is called by systray once the tray is ready.
 func onReady() {
 	// Set title and tooltip including version.
@@ -330,38 +367,32 @@ func onReady() {
 
 	// Add a disabled version menu item.
 	miVersion := systray.AddMenuItem(fmt.Sprintf("Version: %s", version), "Clipboard Regex Replace version")
-	go func() {
-		for range miVersion.ClickedCh {
-			// Informational only.
-		}
-	}()
+	miVersion.Disable() // Disable since it's just informational
+
+	// Add reload configuration option
+	miReloadConfig := systray.AddMenuItem("Reload Configuration", "Reload configuration from config.json")
+
+	// If temporary clipboard functionality is enabled, add revert menu item.
+	if config.TemporaryClipboard {
+		miRevert = systray.AddMenuItem("Revert to Original", "Revert to original clipboard text")
+		miRevert.Disable() // Disabled initially until we have an original to revert to
+	}
 
 	// Add a Quit menu item.
 	mQuit := systray.AddMenuItem("Quit", "Exit the application")
 
-	// If temporary clipboard functionality is enabled, add extra menu items.
-	if config.TemporaryClipboard {
-		miRevert = systray.AddMenuItem("Revert Clipboard", "Revert to original clipboard text")
-		miKeep = systray.AddMenuItem("Keep Replaced Text", "Keep the replaced clipboard text")
-		miRevert.Disable()
-		miKeep.Disable()
+	// Handle Reload Configuration clicks
+	go func() {
+		for range miReloadConfig.ClickedCh {
+			reloadConfig()
+		}
+	}()
 
-		// Listen for clicks on "Revert Clipboard"
+	// Handle Revert Clipboard clicks
+	if config.TemporaryClipboard {
 		go func() {
 			for range miRevert.ClickedCh {
-				cancelReversionTimer()
 				restoreOriginalClipboard()
-			}
-		}()
-		// Listen for clicks on "Keep Replaced Text"
-		go func() {
-			for range miKeep.ClickedCh {
-				cancelReversionTimer()
-				log.Println("User chose to keep replaced text.")
-				if miRevert != nil && miKeep != nil {
-					miRevert.Disable()
-					miKeep.Disable()
-				}
 			}
 		}()
 	}
@@ -372,7 +403,7 @@ func onReady() {
 		log.Fatalf("Failed to parse hotkey configuration: %v", err)
 	}
 	// Register the hotkey using the parsed configuration.
-	hk := hotkey.New(modifiers, key)
+	hk = hotkey.New(modifiers, key)
 	if err := hk.Register(); err != nil {
 		log.Fatalf("Failed to register hotkey: %v", err)
 	}

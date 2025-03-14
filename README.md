@@ -16,13 +16,16 @@ Clipboard Regex Replace is a fast, standalone clipboard filtering application wr
   Automatically updates your clipboard content and simulates a paste.
 
 - **Temporary Clipboard Storage:**  
-  Optionally store the original clipboard text before processing and automatically revert it after pasting. You can also choose to keep the replaced text using the system tray menu options or Windows toast notification actions (if supported).
+  Optionally store the original clipboard text before processing. You can choose to automatically revert to the original clipboard content after pasting or manually revert using the system tray menu option.
+
+- **Dynamic Configuration Reloading:**  
+  Reload configuration changes without restarting the application using the system tray menu.
 
 - **Windows Toast Notifications:**  
-  Displays a toast notification to show successful replacement and notify about temporary clipboard reversion.
+  Displays a toast notification to show successful replacement and configuration changes.
 
 - **System Tray Icon:**  
-  Runs in the background with a system tray icon and provides a menu for quick exit and managing clipboard reversion.
+  Runs in the background with a system tray icon and provides a menu for quick actions like reloading configuration, reverting clipboard, and exiting the application.
 
 - **Standalone Executable:**  
   Easily build and distribute a single EXE file on Windows (with external configuration files).
@@ -58,7 +61,7 @@ The application reads its configuration from an external `config.json` file. Cre
   "hotkey": "ctrl+alt+v",
   "use_notifications": true,
   "temporary_clipboard": true,
-  "reversion_timeout": 10,
+  "automatic_reversion": true,
   "replacements": [
     {
       "regex": "(?i)mypassword",
@@ -74,8 +77,8 @@ The application reads its configuration from an external `config.json` file. Cre
 
 - **hotkey:** The global hotkey to trigger the filtering.
 - **use_notifications:** Set to `true` to enable desktop notifications.
-- **temporary_clipboard:** Set to `true` to enable storing the original clipboard text. When enabled, the replaced clipboard text is pasted, and the original text is automatically restored after a timeout unless you choose otherwise from the tray menu or notification actions.
-- **reversion_timeout:** The number of seconds to wait before automatically reverting the clipboard to its original content (default is 10 seconds if not specified).
+- **temporary_clipboard:** Set to `true` to enable storing the original clipboard text.
+- **automatic_reversion:** Set to `true` to automatically restore the original clipboard content immediately after pasting. When `false`, you can still manually restore the original content using the system tray menu.
 - **replacements:** An array of regex rules with their corresponding replacement text.
 
 > **Important Warning:** Replacements are processed sequentially in the order they appear in the configuration file. This means the order of your regex rules matters! Earlier replacements can affect the text that later replacements operate on. Consider this carefully when organizing your replacement rules to avoid unexpected results.
@@ -83,13 +86,18 @@ The application reads its configuration from an external `config.json` file. Cre
 ## Usage
 
 1. **Running the Application:**  
-   You can run the application during development with:
+   You have two options for running the application:
 
+   **Option 1:** During development, run it using Go:
    ```bash
    go run main.go
    ```
 
-   This will launch the application, register the hotkey, and show the system tray icon.
+   **Option 2:** Run the pre-compiled executable:
+   - Simply double-click the `ClipboardRegexReplace.exe` file
+   - Or create a shortcut to the executable and place it in your startup folder for automatic launch when Windows starts
+
+   Either way, this will launch the application, register the hotkey, and show the system tray icon.
 
 2. **Triggering Clipboard Processing:**  
    Copy some text, then press the configured hotkey (e.g., `Ctrl+Alt+V`). The application will:
@@ -98,9 +106,12 @@ The application reads its configuration from an external `config.json` file. Cre
    - Update the clipboard.
    - Simulate a paste action.
    - Display a toast notification (on Windows) indicating the number of replacements performed.
-   - If enabled, temporarily store the original clipboard content and revert it automatically after 10 seconds (unless you choose to keep the replaced text via the tray menu or notification action).
+   - If enabled, automatically revert to the original clipboard content after pasting or store it for manual reversion through the system tray menu.
 
-3. **Exiting the Application:**  
+3. **Reloading Configuration:**  
+   If you update your `config.json` file while the application is running, you can apply the changes without restarting by right-clicking the system tray icon and selecting **Reload Configuration**.
+
+4. **Exiting the Application:**  
    Right-click the system tray icon and select **Quit** to exit.
 
 ## Building for Windows
@@ -108,7 +119,7 @@ The application reads its configuration from an external `config.json` file. Cre
 To build a Windows executable without a console window, run the following command:
 
 ```bash
-go build -ldflags="-H=windowsgui" -o ClipboardRegexReplace.exe main.go
+go build -ldflags="-H=windowsgui" -o ClipboardRegexReplace.exe main.go keymap.go
 ```
 
 Distribute the resulting `ClipboardRegexReplace.exe` along with the external files `config.json` and optionally `icon.png`. Optionally, a shortcut of the `ClipboardRegexReplace.exe` can be placed in the startup folder.
@@ -122,6 +133,14 @@ Distribute the resulting `ClipboardRegexReplace.exe` along with the external fil
 - [golang.design/x/hotkey](https://pkg.go.dev/golang.design/x/hotkey) – Global hotkey registration.
 
 ## Changelog
+
+### 1.3.0
+- **Dynamic Configuration Reloading:**  
+  Added ability to reload configuration without restarting the application.
+- **Automatic Clipboard Reversion:**  
+  Added option to automatically restore the original clipboard content immediately after pasting.
+- **Simplified Clipboard Management:**  
+  Streamlined the clipboard restoration interface to a single "Revert to Original" option in the system tray.
 
 ### 1.2.0
 - **Temporary Clipboard Storage:**  

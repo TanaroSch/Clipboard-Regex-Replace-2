@@ -132,6 +132,10 @@ Distribute the resulting `ClipboardRegexReplace.exe` along with the external fil
 
 ## Changelog
 
+### 1.3.1
+- **Fixed Original Clipboard Storage:**  
+  Fixed an issue where pressing the hotkey multiple times on already processed text would incorrectly overwrite the stored original clipboard content. The application now properly preserves the original clipboard text until either new content is copied or new replacements are performed.
+
 ### 1.3.0
 - **Dynamic Configuration Reloading:**  
   Added ability to reload configuration without restarting the application.

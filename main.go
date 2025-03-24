@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	// embed package (Go 1.16+)
 	_ "embed"
@@ -24,7 +25,7 @@ import (
 	"golang.design/x/hotkey"
 )
 
-const version = "v1.4.0" // Application version updated for multiple profiles
+const version = "v1.5.0"
 
 // ---------------------------------------------------------------------------
 // 1. Embed the icon.ico for the tray and EXE icon.
@@ -58,10 +59,11 @@ func writeTempIcon() (string, error) {
 
 // ProfileConfig represents a single regex replacement profile
 type ProfileConfig struct {
-	Name         string        `json:"name"`         // Display name for the profile
-	Enabled      bool          `json:"enabled"`      // Whether the profile is active
-	Hotkey       string        `json:"hotkey"`       // Hotkey combination to trigger this profile
-	Replacements []Replacement `json:"replacements"` // Regex replacement rules for this profile
+	Name          string        `json:"name"`                     // Display name for the profile
+	Enabled       bool          `json:"enabled"`                  // Whether the profile is active
+	Hotkey        string        `json:"hotkey"`                   // Hotkey combination to trigger this profile
+	ReverseHotkey string        `json:"reverse_hotkey,omitempty"` // Optional hotkey for reverse replacements
+	Replacements  []Replacement `json:"replacements"`             // Regex replacement rules for this profile
 }
 
 // Config holds the application configuration
@@ -78,8 +80,10 @@ type Config struct {
 
 // Replacement represents one regex replacement rule
 type Replacement struct {
-	Regex       string `json:"regex"`
-	ReplaceWith string `json:"replace_with"`
+	Regex        string `json:"regex"`
+	ReplaceWith  string `json:"replace_with"`
+	PreserveCase bool   `json:"preserve_case,omitempty"` // Case preservation flag
+	ReverseWith  string `json:"reverse_with,omitempty"`  // Optional override for reverse replacement
 }
 
 var config Config
@@ -198,9 +202,193 @@ var lastTransformedClipboard string
 var miRevert *systray.MenuItem
 var registeredHotkeys map[string]*hotkey.Hotkey
 
+// isWord checks if a token is a word (alphanumeric)
+func isWord(token string) bool {
+	for _, r := range token {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_' {
+			return false
+		}
+	}
+	return len(token) > 0
+}
+
+// extractFirstAlternative attempts to extract the first pattern from an alternation
+func extractFirstAlternative(regex string) string {
+	// Remove case-insensitive flag
+	regex = strings.TrimPrefix(regex, "(?i)")
+
+	// Try to extract first alternative from pattern with alternation
+	re := regexp.MustCompile(`\(([^|)]+)`)
+	matches := re.FindStringSubmatch(regex)
+	if len(matches) > 1 {
+		return strings.TrimSpace(matches[1])
+	}
+
+	// If no alternation found, try to extract the pattern inside parentheses
+	re = regexp.MustCompile(`\(([^)]+)\)`)
+	matches = re.FindStringSubmatch(regex)
+	if len(matches) > 1 {
+		return strings.TrimSpace(matches[1])
+	}
+
+	// As a last resort, just clean up the regex
+	regex = strings.TrimPrefix(regex, "(")
+	regex = strings.TrimSuffix(regex, ")")
+	return strings.TrimSpace(regex)
+}
+
+// preserveCase applies the case pattern from source to target
+func preserveCase(source, target string) string {
+	// If source is empty or target is empty, return target as is
+	if source == "" || target == "" {
+		return target
+	}
+
+	// If source is all lowercase, return target as all lowercase
+	if source == strings.ToLower(source) {
+		return strings.ToLower(target)
+	}
+
+	// If source is all uppercase, return target as all uppercase
+	if source == strings.ToUpper(source) {
+		return strings.ToUpper(target)
+	}
+
+	// For PascalCase/camelCase and other mixed cases
+	sourceRunes := []rune(source)
+	targetRunes := []rune(target)
+
+	// If target has internal capitalization (like "GithubUser"), preserve it
+	// but adjust the first character to match source
+	if hasInternalCapitalization(target) {
+		if len(sourceRunes) > 0 && len(targetRunes) > 0 {
+			if unicode.IsUpper(sourceRunes[0]) {
+				targetRunes[0] = unicode.ToUpper(targetRunes[0])
+			} else {
+				targetRunes[0] = unicode.ToLower(targetRunes[0])
+			}
+		}
+		return string(targetRunes)
+	}
+
+	// For Title Case (first letter uppercase, rest lowercase)
+	if len(sourceRunes) > 1 &&
+		unicode.IsUpper(sourceRunes[0]) &&
+		strings.ToLower(string(sourceRunes[1:])) == string(sourceRunes[1:]) {
+		if len(targetRunes) > 0 {
+			if len(targetRunes) > 1 {
+				return string(unicode.ToUpper(targetRunes[0])) + strings.ToLower(string(targetRunes[1:]))
+			} else {
+				return string(unicode.ToUpper(targetRunes[0]))
+			}
+		}
+	}
+
+	// Default: just make first letter match source
+	if len(sourceRunes) > 0 && len(targetRunes) > 0 {
+		if unicode.IsUpper(sourceRunes[0]) {
+			targetRunes[0] = unicode.ToUpper(targetRunes[0])
+		} else {
+			targetRunes[0] = unicode.ToLower(targetRunes[0])
+		}
+	}
+
+	return string(targetRunes)
+}
+
+// hasInternalCapitalization checks if a string has uppercase letters after the first position
+func hasInternalCapitalization(s string) bool {
+	runes := []rune(s)
+	for i := 1; i < len(runes); i++ {
+		if unicode.IsUpper(runes[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// applyForwardReplacement handles normal regex-based replacements
+func applyForwardReplacement(text string, rep Replacement) (string, int) {
+	// Compile the regex pattern
+	re, err := regexp.Compile(rep.Regex)
+	if err != nil {
+		log.Printf("Invalid regex '%s': %v", rep.Regex, err)
+		return text, 0
+	}
+
+	// Count matches before replacement
+	matches := re.FindAllStringIndex(text, -1)
+	matchCount := 0
+	if matches != nil {
+		matchCount = len(matches)
+	}
+
+	// Apply replacement with or without case preservation
+	var result string
+	if rep.PreserveCase {
+		result = re.ReplaceAllStringFunc(text, func(match string) string {
+			return preserveCase(match, rep.ReplaceWith)
+		})
+	} else {
+		result = re.ReplaceAllString(text, rep.ReplaceWith)
+	}
+
+	return result, matchCount
+}
+
+// applyReverseReplacement handles reverse replacements
+func applyReverseReplacement(text string, rep Replacement) (string, int) {
+	// For reverse replacement, we'll work with individual words/tokens
+	origWord := rep.ReplaceWith // What we're looking for (e.g., "GithubUser")
+
+	// What we'll replace it with - check for override first
+	var replaceWord string
+	if rep.ReverseWith != "" {
+		// Use the specified reverse replacement if provided
+		replaceWord = rep.ReverseWith
+	} else {
+		// Fall back to extracting the first alternative from the regex
+		replaceWord = extractFirstAlternative(rep.Regex)
+	}
+
+	// Split the text into tokens (words, whitespace, punctuation)
+	re := regexp.MustCompile(`(\w+|[^\w\s]+|\s+)`)
+	tokens := re.FindAllString(text, -1)
+
+	// Track replacements
+	replacementCount := 0
+
+	// Go through each token and replace if it matches our target
+	for i, token := range tokens {
+		if !isWord(token) {
+			// Skip non-word tokens
+			continue
+		}
+
+		// Check if this token matches our replacement word
+		if (rep.PreserveCase && strings.EqualFold(token, origWord)) ||
+			(!rep.PreserveCase && token == origWord) {
+			// It's a match - replace it
+			if rep.PreserveCase {
+				tokens[i] = preserveCase(token, replaceWord)
+			} else {
+				tokens[i] = replaceWord
+			}
+			replacementCount++
+		}
+	}
+
+	// Only rebuild the text if we made replacements
+	if replacementCount > 0 {
+		return strings.Join(tokens, ""), replacementCount
+	}
+
+	return text, 0
+}
+
 // replaceClipboardText reads the clipboard text, applies regex replacements from all
 // enabled profiles that match the given hotkey, then updates the clipboard and pastes.
-func replaceClipboardText(hotkeyStr string) {
+func replaceClipboardText(hotkeyStr string, isReverse bool) {
 	// Read the current clipboard content
 	origText, err := clipboard.ReadAll()
 	if err != nil {
@@ -220,36 +408,41 @@ func replaceClipboardText(hotkeyStr string) {
 
 	// Apply replacements from all enabled profiles that match this hotkey
 	for _, profile := range config.Profiles {
-		if profile.Enabled && profile.Hotkey == hotkeyStr {
+		if !profile.Enabled {
+			continue
+		}
+
+		// Check if this profile matches the pressed hotkey
+		if (profile.Hotkey == hotkeyStr && !isReverse) ||
+			(profile.ReverseHotkey == hotkeyStr && isReverse) {
 			activeProfiles = append(activeProfiles, profile.Name)
 			profileReplacements := 0
 
 			// Apply each regex replacement rule from this profile
 			for _, rep := range profile.Replacements {
-				re, err := regexp.Compile(rep.Regex)
-				if err != nil {
-					log.Printf("Invalid regex '%s' in profile '%s': %v",
-						rep.Regex, profile.Name, err)
-					continue
+				var replaced string
+				var replacedCount int
+
+				if !isReverse {
+					// Forward replacement
+					replaced, replacedCount = applyForwardReplacement(newText, rep)
+				} else {
+					// Reverse replacement
+					replaced, replacedCount = applyReverseReplacement(newText, rep)
 				}
 
-				// Count matches before replacement
-				matches := re.FindAllStringIndex(newText, -1)
-				matchCount := 0
-				if matches != nil {
-					matchCount = len(matches)
-				}
-
-				// Apply replacement
-				newText = re.ReplaceAllString(newText, rep.ReplaceWith)
-
-				// Add to counters
-				totalReplacements += matchCount
-				profileReplacements += matchCount
+				newText = replaced
+				profileReplacements += replacedCount
+				totalReplacements += replacedCount
 			}
 
-			log.Printf("Applied %d replacements from profile '%s'",
-				profileReplacements, profile.Name)
+			directionText := "forward"
+			if isReverse {
+				directionText = "reverse"
+			}
+
+			log.Printf("Applied %d %s replacements from profile '%s'",
+				profileReplacements, directionText, profile.Name)
 		}
 	}
 
@@ -273,17 +466,22 @@ func replaceClipboardText(hotkeyStr string) {
 
 	// Show notification if replacements were made
 	if totalReplacements > 0 {
-		log.Printf("Clipboard updated with %d total replacements from profiles: %s",
-			totalReplacements, strings.Join(activeProfiles, ", "))
+		directionIndicator := ""
+		if isReverse {
+			directionIndicator = " (reverse)"
+		}
+
+		log.Printf("Clipboard updated with %d total replacements%s from profiles: %s",
+			totalReplacements, directionIndicator, strings.Join(activeProfiles, ", "))
 
 		var message string
 
 		if len(activeProfiles) > 1 {
-			message = fmt.Sprintf("%d replacements applied from profiles: %s",
-				totalReplacements, strings.Join(activeProfiles, ", "))
+			message = fmt.Sprintf("%d replacements%s applied from profiles: %s",
+				totalReplacements, directionIndicator, strings.Join(activeProfiles, ", "))
 		} else {
-			message = fmt.Sprintf("%d replacements applied from profile: %s",
-				totalReplacements, activeProfiles[0])
+			message = fmt.Sprintf("%d replacements%s applied from profile: %s",
+				totalReplacements, directionIndicator, activeProfiles[0])
 		}
 
 		if config.TemporaryClipboard {
@@ -392,6 +590,53 @@ func parseHotkey(hotkeyStr string) ([]hotkey.Modifier, hotkey.Key, error) {
 	return modifiers, key, nil
 }
 
+// registerProfileHotkey registers a hotkey for a profile
+func registerProfileHotkey(profile ProfileConfig, hotkeyStr string, isReverse bool) {
+	// Skip if already registered
+	if _, exists := registeredHotkeys[hotkeyStr]; exists {
+		return
+	}
+
+	// Parse and register the hotkey as before
+	modifiers, key, err := parseHotkey(hotkeyStr)
+	if err != nil {
+		log.Printf("Failed to parse hotkey '%s' for profile '%s': %v",
+			hotkeyStr, profile.Name, err)
+		return
+	}
+
+	hk := hotkey.New(modifiers, key)
+	if err := hk.Register(); err != nil {
+		log.Printf("Failed to register hotkey '%s' for profile '%s': %v",
+			hotkeyStr, profile.Name, err)
+		return
+	}
+
+	// Store in our tracking map
+	registeredHotkeys[hotkeyStr] = hk
+
+	// Direction suffix for logging
+	directionSuffix := ""
+	if isReverse {
+		directionSuffix = " (reverse)"
+	}
+
+	// Create the listener for this hotkey
+	go func(hotkeyStr string, isReverse bool) {
+		hk := registeredHotkeys[hotkeyStr] // Capture the hotkey object
+		for range hk.Keydown() {
+			log.Printf("Hotkey '%s' pressed. Processing clipboard using profile: %s%s",
+				hotkeyStr, profile.Name, directionSuffix)
+
+			// Pass the reverse flag to the processing function
+			replaceClipboardText(hotkeyStr, isReverse)
+		}
+	}(hotkeyStr, isReverse)
+
+	log.Printf("Registered hotkey '%s' for profile: %s%s",
+		hotkeyStr, profile.Name, directionSuffix)
+}
+
 // registerHotkeys registers all hotkeys for enabled profiles
 func registerHotkeys() {
 	// Clean up existing hotkeys
@@ -416,42 +661,19 @@ func registerHotkeys() {
 		// Add profile to the list for this hotkey
 		hotkeyProfiles[profile.Hotkey] = append(hotkeyProfiles[profile.Hotkey], profile.Name)
 
-		// Skip registration if this hotkey is already registered
-		if _, exists := registeredHotkeys[profile.Hotkey]; exists {
-			continue
+		// Add to reverse hotkey tracking if it exists
+		if profile.ReverseHotkey != "" {
+			hotkeyProfiles[profile.ReverseHotkey] = append(
+				hotkeyProfiles[profile.ReverseHotkey], profile.Name+" (reverse)")
 		}
 
-		// Parse and register the hotkey
-		modifiers, key, err := parseHotkey(profile.Hotkey)
-		if err != nil {
-			log.Printf("Failed to parse hotkey '%s' for profile '%s': %v",
-				profile.Hotkey, profile.Name, err)
-			continue
+		// Register standard hotkey
+		registerProfileHotkey(profile, profile.Hotkey, false)
+
+		// Register reverse hotkey if specified
+		if profile.ReverseHotkey != "" {
+			registerProfileHotkey(profile, profile.ReverseHotkey, true)
 		}
-
-		hk := hotkey.New(modifiers, key)
-		if err := hk.Register(); err != nil {
-			log.Printf("Failed to register hotkey '%s' for profile '%s': %v",
-				profile.Hotkey, profile.Name, err)
-			continue
-		}
-
-		// Store in our tracking map
-		registeredHotkeys[profile.Hotkey] = hk
-
-		// Create the listener for this hotkey
-		go func(hotkeyStr string) {
-			hk := registeredHotkeys[hotkeyStr] // Capture the hotkey object
-			for range hk.Keydown() {
-				profileNames := strings.Join(hotkeyProfiles[hotkeyStr], ", ")
-				log.Printf("Hotkey '%s' pressed. Processing clipboard using profiles: %s",
-					hotkeyStr, profileNames)
-				replaceClipboardText(hotkeyStr)
-			}
-		}(profile.Hotkey)
-
-		log.Printf("Registered hotkey '%s' for profiles: %s",
-			profile.Hotkey, strings.Join(hotkeyProfiles[profile.Hotkey], ", "))
 	}
 }
 
@@ -561,7 +783,15 @@ func updateProfileMenuItems() {
 		}
 
 		// Create menu item with tooltip
-		tooltip := fmt.Sprintf("Toggle profile: %s (Hotkey: %s)", profile.Name, profile.Hotkey)
+		var tooltip string
+		if profile.ReverseHotkey != "" {
+			tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s, Reverse: %s)",
+				profile.Name, profile.Hotkey, profile.ReverseHotkey)
+		} else {
+			tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s)",
+				profile.Name, profile.Hotkey)
+		}
+
 		menuItem := miProfiles.AddSubMenuItem(menuText, tooltip)
 
 		// Handle clicks
@@ -604,13 +834,16 @@ func updateProfileMenuItems() {
 		for range miAddProfile.ClickedCh {
 			// Create a new profile
 			newProfile := ProfileConfig{
-				Name:    fmt.Sprintf("New Profile %s", time.Now().Format("15:04:05")),
-				Enabled: true,
-				Hotkey:  "ctrl+alt+n",
+				Name:          fmt.Sprintf("New Profile %s", time.Now().Format("15:04:05")),
+				Enabled:       true,
+				Hotkey:        "ctrl+alt+n",
+				ReverseHotkey: "", // Empty by default
 				Replacements: []Replacement{
 					{
-						Regex:       "example",
-						ReplaceWith: "replacement",
+						Regex:        "example",
+						ReplaceWith:  "replacement",
+						PreserveCase: false, // Default to false for backward compatibility
+						ReverseWith:  "",    // Empty by default
 					},
 				},
 			}

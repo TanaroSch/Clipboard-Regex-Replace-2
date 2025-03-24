@@ -18,6 +18,12 @@ Clipboard Regex Replace is a fast, standalone clipboard filtering application wr
 - **Multiple Profile Support:**  
   Create and manage multiple sets of replacement rules with different hotkeys.
 
+- **Case-Preserving Replacements:**  
+  Maintain capitalization patterns when replacing text (e.g., lowercase, UPPERCASE, Title Case, PascalCase).
+
+- **Bidirectional Replacements:**  
+  Configure reverse hotkeys to switch back from replaced text to original text.
+
 - **Temporary Clipboard Storage:**  
   Optionally store the original clipboard text before processing. You can choose to automatically revert to the original clipboard content after pasting or manually revert using the system tray menu option.
 
@@ -133,6 +139,7 @@ Edit your `config.json` file to use the new format:
 - **name**: A descriptive name for the profile (displayed in the system tray)
 - **enabled**: Whether the profile is active (can be toggled in the tray)
 - **hotkey**: The hotkey combination that triggers this profile
+- **reverse_hotkey**: Optional hotkey for reverse replacements (bidirectional mode)
 - **replacements**: An array of regex replacement rules for this profile
 
 ### Using Profiles
@@ -141,11 +148,101 @@ Edit your `config.json` file to use the new format:
 2. **Toggling Profiles**: Enable or disable profiles via the "Profiles" submenu in the system tray.
 3. **Adding New Profiles**: Click "Add New Profile" in the system tray, then edit the config.json file to customize it.
 4. **Shared Hotkeys**: Multiple enabled profiles can share the same hotkey. When that hotkey is pressed, all the replacement rules from those profiles will be applied in sequence.
-5. **Restarting the Application**: If you experience menu duplication issues, use the "Restart Application" option in the system tray.
+5. **Bidirectional Replacements**: Set up a `reverse_hotkey` to enable going from replaced text back to original text.
+6. **Restarting the Application**: If you experience menu duplication issues, use the "Restart Application" option in the system tray.
 
 ### Migration from Previous Versions
 
 When you upgrade from an earlier version, your existing configuration will be automatically migrated to the new format. Your existing replacement rules will be placed in a "Default" profile that retains your original hotkey configuration.
+
+## Case-Preserving and Reversible Replacements
+
+As of version 1.5.0, Clipboard Regex Replace supports case-preserving and bidirectional replacements.
+
+### Case Preservation
+
+With case preservation, the application maintains the capitalization pattern when replacing text:
+
+```json
+{
+  "regex": "(?i)(JohnDoe)",
+  "replace_with": "GithubUser",
+  "preserve_case": true
+}
+```
+
+This will maintain the case pattern:
+- `johndoe` → `githubuser` (lowercase preserved)
+- `JOHNDOE` → `GITHUBUSER` (UPPERCASE preserved)
+- `JohnDoe` → `GithubUser` (PascalCase preserved)
+- `Johndoe` → `Githubuser` (First letter capitalized preserved)
+
+### Bidirectional Replacements
+
+You can add a `reverse_hotkey` to profiles to enable bidirectional replacements:
+
+```json
+{
+  "name": "Privacy - Bidirectional",
+  "enabled": true,
+  "hotkey": "ctrl+alt+v",
+  "reverse_hotkey": "shift+alt+v",
+  "replacements": [
+    {
+      "regex": "(?i)(JohnDoe_T|JohnDoe|John)",
+      "replace_with": "GithubUser",
+      "preserve_case": true
+    }
+  ]
+}
+```
+
+When using bidirectional replacements:
+- Pressing `ctrl+alt+v` performs normal replacements (`JohnDoe` → `GithubUser`)
+- Pressing `shift+alt+v` performs reverse replacements (`GithubUser` → `JohnDoe_T`)
+
+### Custom Reverse Replacements
+
+By default, reverse replacements use the first pattern from the regex alternation. You can override this behavior with the `reverse_with` field:
+
+```json
+{
+  "regex": "(?i)(JohnDoe_T|JohnDoe|John)",
+  "replace_with": "GithubUser",
+  "preserve_case": true,
+  "reverse_with": "JohnDoe"
+}
+```
+
+This specifies that `GithubUser` should be reversed to `JohnDoe` (not `JohnDoe_T` which would be the default).
+
+### Example Configuration with Advanced Features
+
+```json
+{
+  "profiles": [
+    {
+      "name": "Privacy - Bidirectional",
+      "enabled": true,
+      "hotkey": "ctrl+alt+v",
+      "reverse_hotkey": "shift+alt+v",
+      "replacements": [
+        {
+          "regex": "(?i)(JohnDoe_T|JohnDoe|John)",
+          "replace_with": "GithubUser",
+          "preserve_case": true,
+          "reverse_with": "JohnDoe"
+        },
+        {
+          "regex": "(?i)(Smith|Taylor)",
+          "replace_with": "Contributor",
+          "preserve_case": true
+        }
+      ]
+    }
+  ]
+}
+```
 
 ## Usage
 
@@ -172,10 +269,15 @@ When you upgrade from an earlier version, your existing configuration will be au
    - Display a toast notification (on Windows) indicating the number of replacements performed.
    - If enabled, automatically revert to the original clipboard content after pasting or store it for manual reversion through the system tray menu.
 
-3. **Reloading Configuration:**  
+3. **Using Reverse Replacements (if configured):**  
+   Copy some text that contains previously replaced content, then press the reverse hotkey (e.g., `Ctrl+Alt+R`). The application will:
+   - Replace any instances of replacement text with the original text.
+   - Maintain case patterns if case preservation is enabled.
+
+4. **Reloading Configuration:**  
    If you update your `config.json` file while the application is running, you can apply the changes without restarting by right-clicking the system tray icon and selecting **Reload Configuration**.
 
-4. **Exiting the Application:**  
+5. **Exiting the Application:**  
    Right-click the system tray icon and select **Quit** to exit.
 
 ## Building for Windows
@@ -197,6 +299,14 @@ Distribute the resulting `ClipboardRegexReplace.exe` along with the external fil
 - [golang.design/x/hotkey](https://pkg.go.dev/golang.design/x/hotkey) – Global hotkey registration.
 
 ## Changelog
+
+### 1.5.0
+- **Case-Preserving Replacements:**
+  Added support for maintaining capitalization patterns when replacing text (lowercase, UPPERCASE, Title Case, PascalCase).
+- **Bidirectional Replacements:**
+  Added `reverse_hotkey` to profiles for enabling reversible replacements.
+- **Custom Reverse Replacements:**
+  Added `reverse_with` field to override the default text used in reverse replacements.
 
 ### 1.4.0
 - **Multiple Profile Support:**

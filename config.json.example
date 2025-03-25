@@ -1,16 +1,52 @@
 {
-  "hotkey": "ctrl+alt+v",
   "use_notifications": true,
   "temporary_clipboard": true,
-  "reversion_timeout": 10,
-  "replacements": [
+  "automatic_reversion": true,
+  "profiles": [
     {
-      "regex": "(?i)name[s]?[/\\\\]",
-      "replace_with": ""
+      "name": "General Cleanup",
+      "enabled": true,
+      "hotkey": "ctrl+alt+v",
+      "replacements": [
+        {
+          "regex": "\\s+",
+          "replace_with": " "
+        },
+        {
+          "regex": "(?i)name[s]?[/\\\\]",
+          "replace_with": ""
+        }
+      ]
     },
     {
-      "regex": "example_pattern",
-      "replace_with": "example_replacement"
+      "name": "Code Formatting",
+      "enabled": true,
+      "hotkey": "ctrl+alt+c",
+      "replacements": [
+        {
+          "regex": "\\t",
+          "replace_with": "    "
+        },
+        {
+          "regex": "\\s+$",
+          "replace_with": ""
+        }
+      ]
+    },
+    {
+      "name": "Privacy",
+      "enabled": false,
+      "hotkey": "ctrl+alt+v",
+      "replacements": [
+        {
+          "regex": "(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b",
+          "replace_with": "[EMAIL REDACTED]"
+        },
+        {
+          "regex": "\\b\\d{3}-\\d{2}-\\d{4}\\b",
+          "replace_with": "[SSN REDACTED]"
+        }
+      ]
     }
   ]
 }

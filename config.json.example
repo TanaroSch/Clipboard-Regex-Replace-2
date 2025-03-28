@@ -2,6 +2,7 @@
   "use_notifications": true,
   "temporary_clipboard": true,
   "automatic_reversion": true,
+  "revert_hotkey": "ctrl+alt+r",
   "profiles": [
     {
       "name": "General Cleanup",

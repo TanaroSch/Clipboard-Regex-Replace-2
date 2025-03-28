@@ -25,7 +25,7 @@ import (
 	"golang.design/x/hotkey"
 )
 
-const version = "v1.5.0"
+const version = "v1.5.1"
 
 // ---------------------------------------------------------------------------
 // 1. Embed the icon.ico for the tray and EXE icon.
@@ -71,6 +71,7 @@ type Config struct {
 	UseNotifications   bool            `json:"use_notifications"`   // Whether to show notifications
 	TemporaryClipboard bool            `json:"temporary_clipboard"` // Whether to store original clipboard
 	AutomaticReversion bool            `json:"automatic_reversion"` // Whether to revert clipboard after paste
+	RevertHotkey       string          `json:"revert_hotkey"`       // Hotkey for manual reversion
 	Profiles           []ProfileConfig `json:"profiles"`            // List of replacement profiles
 
 	// Legacy support fields (for backward compatibility)
@@ -487,6 +488,8 @@ func replaceClipboardText(hotkeyStr string, isReverse bool) {
 		if config.TemporaryClipboard {
 			if config.AutomaticReversion {
 				message += ". Clipboard will be automatically reverted after paste."
+			} else if config.RevertHotkey != "" {
+				message += fmt.Sprintf(". Press %s to revert or use system tray menu.", config.RevertHotkey)
 			} else {
 				message += ". Original text stored for manual reversion."
 			}
@@ -637,6 +640,41 @@ func registerProfileHotkey(profile ProfileConfig, hotkeyStr string, isReverse bo
 		hotkeyStr, profile.Name, directionSuffix)
 }
 
+// registerRevertHotkey registers a global hotkey for reverting the clipboard
+func registerRevertHotkey(hotkeyStr string) {
+	// Skip if already registered
+	if _, exists := registeredHotkeys[hotkeyStr]; exists {
+		return
+	}
+
+	// Parse the hotkey
+	modifiers, key, err := parseHotkey(hotkeyStr)
+	if err != nil {
+		log.Printf("Failed to parse revert hotkey '%s': %v", hotkeyStr, err)
+		return
+	}
+
+	// Register the hotkey
+	hk := hotkey.New(modifiers, key)
+	if err := hk.Register(); err != nil {
+		log.Printf("Failed to register revert hotkey '%s': %v", hotkeyStr, err)
+		return
+	}
+
+	// Store in our tracking map
+	registeredHotkeys[hotkeyStr] = hk
+
+	// Create the listener for this hotkey
+	go func() {
+		for range hk.Keydown() {
+			log.Printf("Revert hotkey '%s' pressed. Restoring original clipboard.", hotkeyStr)
+			restoreOriginalClipboard()
+		}
+	}()
+
+	log.Printf("Registered revert hotkey: %s", hotkeyStr)
+}
+
 // registerHotkeys registers all hotkeys for enabled profiles
 func registerHotkeys() {
 	// Clean up existing hotkeys
@@ -674,6 +712,11 @@ func registerHotkeys() {
 		if profile.ReverseHotkey != "" {
 			registerProfileHotkey(profile, profile.ReverseHotkey, true)
 		}
+	}
+
+	// Register the global revert hotkey if configured and applicable
+	if config.RevertHotkey != "" && config.TemporaryClipboard && !config.AutomaticReversion {
+		registerRevertHotkey(config.RevertHotkey)
 	}
 }
 

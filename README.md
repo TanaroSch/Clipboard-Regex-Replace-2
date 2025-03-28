@@ -25,7 +25,10 @@ Clipboard Regex Replace is a fast, standalone clipboard filtering application wr
   Configure reverse hotkeys to switch back from replaced text to original text.
 
 - **Temporary Clipboard Storage:**  
-  Optionally store the original clipboard text before processing. You can choose to automatically revert to the original clipboard content after pasting or manually revert using the system tray menu option.
+  Optionally store the original clipboard text before processing. You can choose to automatically revert to the original clipboard content after pasting or manually revert using the system tray menu.
+
+- **Global Revert Hotkey:**  
+  Configure a dedicated hotkey to quickly revert to the original clipboard content when automatic reversion is disabled.
 
 - **Dynamic Configuration Reloading:**  
   Reload configuration changes without restarting the application using the system tray menu.
@@ -107,6 +110,7 @@ Edit your `config.json` file to use the new format:
   "use_notifications": true,
   "temporary_clipboard": true,
   "automatic_reversion": true,
+  "revert_hotkey": "ctrl+alt+r",
   "profiles": [
     {
       "name": "General Cleanup",
@@ -220,6 +224,10 @@ This specifies that `GithubUser` should be reversed to `JohnDoe` (not `JohnDoe_T
 
 ```json
 {
+  "use_notifications": true,
+  "temporary_clipboard": true,
+  "automatic_reversion": false,
+  "revert_hotkey": "ctrl+alt+r",
   "profiles": [
     {
       "name": "Privacy - Bidirectional",
@@ -267,17 +275,22 @@ This specifies that `GithubUser` should be reversed to `JohnDoe` (not `JohnDoe_T
    - Update the clipboard.
    - Simulate a paste action.
    - Display a toast notification (on Windows) indicating the number of replacements performed.
-   - If enabled, automatically revert to the original clipboard content after pasting or store it for manual reversion through the system tray menu.
+   - If enabled, automatically revert to the original clipboard content after pasting or store it for manual reversion through the system tray menu or revert hotkey.
 
 3. **Using Reverse Replacements (if configured):**  
    Copy some text that contains previously replaced content, then press the reverse hotkey (e.g., `Ctrl+Alt+R`). The application will:
    - Replace any instances of replacement text with the original text.
    - Maintain case patterns if case preservation is enabled.
 
-4. **Reloading Configuration:**  
+4. **Reverting to Original Clipboard:**  
+   If automatic reversion is disabled but temporary clipboard is enabled, you can:
+   - Press the configured revert hotkey (e.g., `Ctrl+Alt+R`)
+   - Or right-click the system tray icon and select **Revert to Original**
+
+5. **Reloading Configuration:**  
    If you update your `config.json` file while the application is running, you can apply the changes without restarting by right-clicking the system tray icon and selecting **Reload Configuration**.
 
-5. **Exiting the Application:**  
+6. **Exiting the Application:**  
    Right-click the system tray icon and select **Quit** to exit.
 
 ## Building for Windows
@@ -299,6 +312,10 @@ Distribute the resulting `ClipboardRegexReplace.exe` along with the external fil
 - [golang.design/x/hotkey](https://pkg.go.dev/golang.design/x/hotkey) – Global hotkey registration.
 
 ## Changelog
+
+### 1.5.1
+- **Global Revert Hotkey:**
+  Added support for a dedicated global hotkey that reverts the clipboard to its original content when automatic reversion is disabled.
 
 ### 1.5.0
 - **Case-Preserving Replacements:**

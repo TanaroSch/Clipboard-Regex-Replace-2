@@ -50,6 +50,34 @@
           "replace_with": "[SSN REDACTED]"
         }
       ]
+      "name": "Code Formatting",
+      "enabled": true,
+      "hotkey": "ctrl+alt+c",
+      "replacements": [
+        {
+          "regex": "\\t",
+          "replace_with": "    "
+        },
+        {
+          "regex": "\\s+$",
+          "replace_with": ""
+        }
+      ]
+    },
+    {
+      "name": "Privacy",
+      "enabled": false,
+      "hotkey": "ctrl+alt+v",
+      "replacements": [
+        {
+          "regex": "(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b",
+          "replace_with": "[EMAIL REDACTED]"
+        },
+        {
+          "regex": "\\b\\d{3}-\\d{2}-\\d{4}\\b",
+          "replace_with": "[SSN REDACTED]"
+        }
+      ]
     }
   ]
 }

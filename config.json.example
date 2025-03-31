@@ -2,11 +2,13 @@
   "use_notifications": true,
   "temporary_clipboard": true,
   "automatic_reversion": true,
+  "revert_hotkey": "ctrl+alt+r",
   "profiles": [
     {
       "name": "General Cleanup",
       "enabled": true,
       "hotkey": "ctrl+alt+v",
+      "reverse_hotkey": "shift+alt+v",
       "replacements": [
         {
           "regex": "\\s+",
@@ -15,6 +17,7 @@
         {
           "regex": "(?i)name[s]?[/\\\\]",
           "replace_with": ""
+          "preserve_case": true
         }
       ]
     },

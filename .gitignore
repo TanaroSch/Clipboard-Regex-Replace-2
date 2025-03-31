@@ -1,7 +1,8 @@
 # Binaries and build artifacts
-ClipboardRegexReplace
-ClipboardRegexReplace.exe
-ClipboardRegexReplace.exe~
+bin/
+dist/
+*.exe
+*.exe~
 
 # Log files
 clipboard_regex_replace.log

@@ -25,7 +25,10 @@ Clipboard Regex Replace is a fast, standalone clipboard filtering application wr
   Configure reverse hotkeys to switch back from replaced text to original text.
 
 - **Temporary Clipboard Storage:**  
-  Optionally store the original clipboard text before processing. You can choose to automatically revert to the original clipboard content after pasting or manually revert using the system tray menu option.
+  Optionally store the original clipboard text before processing. You can choose to automatically revert to the original clipboard content after pasting or manually revert using the system tray menu.
+
+- **Global Revert Hotkey:**  
+  Configure a dedicated hotkey to quickly revert to the original clipboard content when automatic reversion is disabled.
 
 - **Dynamic Configuration Reloading:**  
   Reload configuration changes without restarting the application using the system tray menu.
@@ -43,6 +46,30 @@ Clipboard Regex Replace is a fast, standalone clipboard filtering application wr
 
 - [Go 1.16+](https://golang.org/dl/)
 - A Windows machine for building the Windows executable (or cross-compilation setup)
+
+## Project Structure
+
+The project now follows a modern Go project structure:
+
+```
+clipboard-regex-replace/
+├── cmd/
+│   └── clipregex/          # Main entry point
+├── internal/               # Internal packages
+│   ├── app/                # Application core
+│   ├── clipboard/          # Clipboard handling
+│   ├── config/             # Configuration
+│   ├── hotkey/             # Hotkey management
+│   ├── resources/          # Embedded resources
+│   └── ui/                 # User interface
+├── dist/                   # Distribution builds
+├── assets/                 # External assets
+├── go.mod
+├── go.sum
+├── config.json.example
+├── icon.png                # External icon for notifications
+└── README.md
+```
 
 ## Installation
 
@@ -63,7 +90,7 @@ Clipboard Regex Replace is a fast, standalone clipboard filtering application wr
 
 ## Configuration
 
-The application reads its configuration from an external `config.json` file. As of v1.4.0, Clipboard Regex Replace supports multiple profiles (see the [Multiple Profile Support](#multiple-profile-support) section).
+The application reads its configuration from an external `config.json` file. As of v1.5.0, Clipboard Regex Replace supports multiple profiles (see the [Multiple Profile Support](#multiple-profile-support) section).
 
 For backward compatibility, the original configuration format is still supported:
 
@@ -88,7 +115,7 @@ However, this format will be automatically migrated to the new multi-profile for
 
 ## Multiple Profile Support
 
-As of version 1.4.0, Clipboard Regex Replace supports multiple configuration profiles. Each profile can have its own set of replacement patterns and hotkey bindings.
+Clipboard Regex Replace supports multiple configuration profiles. Each profile can have its own set of replacement patterns and hotkey bindings.
 
 ### Features
 
@@ -107,6 +134,7 @@ Edit your `config.json` file to use the new format:
   "use_notifications": true,
   "temporary_clipboard": true,
   "automatic_reversion": true,
+  "revert_hotkey": "ctrl+shift+alt+r",
   "profiles": [
     {
       "name": "General Cleanup",
@@ -157,7 +185,7 @@ When you upgrade from an earlier version, your existing configuration will be au
 
 ## Case-Preserving and Reversible Replacements
 
-As of version 1.5.0, Clipboard Regex Replace supports case-preserving and bidirectional replacements.
+Clipboard Regex Replace supports case-preserving and bidirectional replacements.
 
 ### Case Preservation
 
@@ -172,6 +200,7 @@ With case preservation, the application maintains the capitalization pattern whe
 ```
 
 This will maintain the case pattern:
+
 - `johndoe` → `githubuser` (lowercase preserved)
 - `JOHNDOE` → `GITHUBUSER` (UPPERCASE preserved)
 - `JohnDoe` → `GithubUser` (PascalCase preserved)
@@ -198,6 +227,7 @@ You can add a `reverse_hotkey` to profiles to enable bidirectional replacements:
 ```
 
 When using bidirectional replacements:
+
 - Pressing `ctrl+alt+v` performs normal replacements (`JohnDoe` → `GithubUser`)
 - Pressing `shift+alt+v` performs reverse replacements (`GithubUser` → `JohnDoe_T`)
 
@@ -216,45 +246,19 @@ By default, reverse replacements use the first pattern from the regex alternatio
 
 This specifies that `GithubUser` should be reversed to `JohnDoe` (not `JohnDoe_T` which would be the default).
 
-### Example Configuration with Advanced Features
-
-```json
-{
-  "profiles": [
-    {
-      "name": "Privacy - Bidirectional",
-      "enabled": true,
-      "hotkey": "ctrl+alt+v",
-      "reverse_hotkey": "shift+alt+v",
-      "replacements": [
-        {
-          "regex": "(?i)(JohnDoe_T|JohnDoe|John)",
-          "replace_with": "GithubUser",
-          "preserve_case": true,
-          "reverse_with": "JohnDoe"
-        },
-        {
-          "regex": "(?i)(Smith|Taylor)",
-          "replace_with": "Contributor",
-          "preserve_case": true
-        }
-      ]
-    }
-  ]
-}
-```
-
 ## Usage
 
 1. **Running the Application:**  
    You have two options for running the application:
 
    **Option 1:** During development, run it using Go:
+
    ```bash
-   go run main.go keymap.go
+   go run cmd/clipregex/main.go
    ```
 
    **Option 2:** Run the pre-compiled executable:
+
    - Simply double-click the `ClipboardRegexReplace.exe` file
    - Or create a shortcut to the executable and place it in your startup folder for automatic launch when Windows starts
 
@@ -262,33 +266,45 @@ This specifies that `GithubUser` should be reversed to `JohnDoe` (not `JohnDoe_T
 
 2. **Triggering Clipboard Processing:**  
    Copy some text, then press the configured hotkey (e.g., `Ctrl+Alt+V`). The application will:
+
    - Read your clipboard text.
    - Apply the configured regex replacements from all enabled profiles with matching hotkey.
    - Update the clipboard.
    - Simulate a paste action.
    - Display a toast notification (on Windows) indicating the number of replacements performed.
-   - If enabled, automatically revert to the original clipboard content after pasting or store it for manual reversion through the system tray menu.
+   - If enabled, automatically revert to the original clipboard content after pasting or store it for manual reversion through the system tray menu or revert hotkey.
 
 3. **Using Reverse Replacements (if configured):**  
-   Copy some text that contains previously replaced content, then press the reverse hotkey (e.g., `Ctrl+Alt+R`). The application will:
+   Copy some text that contains previously replaced content, then press the reverse hotkey (e.g., `Shift+Alt+V`). The application will:
+
    - Replace any instances of replacement text with the original text.
    - Maintain case patterns if case preservation is enabled.
 
-4. **Reloading Configuration:**  
+4. **Reverting to Original Clipboard:**  
+   If automatic reversion is disabled but temporary clipboard is enabled, you can:
+
+   - Press the configured revert hotkey (e.g., `Ctrl+Shift+Alt+R`)
+   - Or right-click the system tray icon and select **Revert to Original**
+
+5. **Reloading Configuration:**  
    If you update your `config.json` file while the application is running, you can apply the changes without restarting by right-clicking the system tray icon and selecting **Reload Configuration**.
 
-5. **Exiting the Application:**  
+6. **Exiting the Application:**  
    Right-click the system tray icon and select **Quit** to exit.
 
 ## Building for Windows
 
-To build a Windows executable without a console window, run the following command:
+To build a Windows executable without a console window:
 
 ```bash
-go build -ldflags="-H=windowsgui" -o ClipboardRegexReplace.exe main.go keymap.go
+go build -ldflags="-H=windowsgui" -o dist/ClipboardRegexReplace.exe cmd/clipregex/main.go
 ```
 
-Distribute the resulting `ClipboardRegexReplace.exe` along with the external files `config.json` and optionally `icon.png`. Optionally, a shortcut of the `ClipboardRegexReplace.exe` can be placed in the startup folder.
+For distribution, include the following files:
+
+- `ClipboardRegexReplace.exe`
+- `config.json.example` (rename to `config.json`)
+- `icon.png` (optional, for higher quality notifications)
 
 ## Dependencies
 
@@ -300,7 +316,22 @@ Distribute the resulting `ClipboardRegexReplace.exe` along with the external fil
 
 ## Changelog
 
+### 1.5.2
+
+- **Major Code Refactoring**:
+  - Reorganized project into a proper Go package structure
+  - Improved platform-specific clipboard paste handling
+  - Enhanced error handling and logging
+  - Better separation of concerns between packages
+  - No functional changes, purely architectural improvements
+
+### 1.5.1
+
+- **Global Revert Hotkey:**
+  Added support for a dedicated global hotkey that reverts the clipboard to its original content when automatic reversion is disabled.
+
 ### 1.5.0
+
 - **Case-Preserving Replacements:**
   Added support for maintaining capitalization patterns when replacing text (lowercase, UPPERCASE, Title Case, PascalCase).
 - **Bidirectional Replacements:**
@@ -309,6 +340,7 @@ Distribute the resulting `ClipboardRegexReplace.exe` along with the external fil
   Added `reverse_with` field to override the default text used in reverse replacements.
 
 ### 1.4.0
+
 - **Multiple Profile Support:**
   Added support for multiple named profiles, each with its own set of replacement rules and hotkey binding.
 - **Profile Management:**
@@ -317,10 +349,12 @@ Distribute the resulting `ClipboardRegexReplace.exe` along with the external fil
   Profiles with the same hotkey have their replacement rules merged and applied sequentially.
 
 ### 1.3.1
+
 - **Fixed Original Clipboard Storage:**  
   Fixed an issue where pressing the hotkey multiple times on already processed text would incorrectly overwrite the stored original clipboard content. The application now properly preserves the original clipboard text until either new content is copied or new replacements are performed.
 
 ### 1.3.0
+
 - **Dynamic Configuration Reloading:**  
   Added ability to reload configuration without restarting the application.
 - **Automatic Clipboard Reversion:**  

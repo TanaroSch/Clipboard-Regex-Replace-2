@@ -7,6 +7,7 @@ require (
 	github.com/gen2brain/beeep v0.0.0-20240516210008-9c006672e7f4
 	github.com/getlantern/systray v1.2.2
 	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4
+	github.com/sergi/go-diff v1.3.1
 	golang.design/x/hotkey v0.4.1
 )
 

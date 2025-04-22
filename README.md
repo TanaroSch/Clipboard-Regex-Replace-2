@@ -1,48 +1,51 @@
 # Clipboard Regex Replace
 
-Clipboard Regex Replace is a fast, standalone clipboard filtering application written in Go. It automatically applies a series of regex-based replacements to your clipboard text when you press a global hotkey, then updates your clipboard and simulates a paste action. Additionally, it provides Windows toast notifications and a system tray icon for easy management.
+Clipboard Regex Replace is a fast, standalone clipboard filtering application written in Go. It automatically applies a series of regex-based replacements to your clipboard text when you press a global hotkey, then updates your clipboard and simulates a paste action. Additionally, it provides Windows toast notifications, a system tray icon for easy management, and a detailed diff view for analyzing changes.
 
 > **Note:** This implementation is a major upgrade compared to the initial Python implementation in [Clipboard-Regex-Replace](https://github.com/TanaroSch/Cliboard-Regex-Replace). It's designed to be lightweight, efficient, and easy to distribute as a single executable (with only external configuration).
 
 ## Features
 
-- **Global Hotkey Trigger:**  
+- **Global Hotkey Trigger:**
   Press a configurable hotkey (default: `Ctrl+Alt+V`) to process the clipboard text.
 
-- **Regex-based Filtering:**  
+- **Regex-based Filtering:**
   Define multiple regex replacement rules in an external configuration file (`config.json`).
 
-- **Clipboard Automation:**  
+- **Clipboard Automation:**
   Automatically updates your clipboard content and simulates a paste.
 
-- **Multiple Profile Support:**  
+- **Multiple Profile Support:**
   Create and manage multiple sets of replacement rules with different hotkeys.
 
-- **Case-Preserving Replacements:**  
+- **Case-Preserving Replacements:**
   Maintain capitalization patterns when replacing text (e.g., lowercase, UPPERCASE, Title Case, PascalCase).
 
-- **Bidirectional Replacements:**  
+- **Bidirectional Replacements:**
   Configure reverse hotkeys to switch back from replaced text to original text.
 
-- **Temporary Clipboard Storage:**  
+- **Temporary Clipboard Storage:**
   Optionally store the original clipboard text before processing. You can choose to automatically revert to the original clipboard content after pasting or manually revert using the system tray menu.
 
-- **Global Revert Hotkey:**  
+- **Global Revert Hotkey:**
   Configure a dedicated hotkey to quickly revert to the original clipboard content when automatic reversion is disabled.
 
-- **Dynamic Configuration Reloading:**  
+- **Dynamic Configuration Reloading:**
   Reload configuration changes without restarting the application using the system tray menu.
 
 - **Open Configuration File:**
   Quickly open your `config.json` file in the default text editor directly from the system tray menu.
 
-- **Windows Toast Notifications:**  
-  Displays a toast notification to show successful replacement and configuration changes.
+- **Windows Toast Notifications:**
+  Displays a toast notification to show successful replacement and configuration changes. The notification now prompts to view changes via the systray.
 
-- **System Tray Icon:**  
-  Runs in the background with a system tray icon and provides a menu for quick actions like opening the configuration file, reloading configuration, reverting clipboard, and exiting the application.
+- **System Tray Icon:**
+  Runs in the background with a system tray icon and provides a menu for quick actions like opening the configuration file, reloading configuration, viewing last changes, reverting clipboard, and exiting the application.
 
-- **Standalone Executable:**  
+- **Change Details Viewer:**
+  After a replacement occurs, view a detailed HTML report showing a summary of changes and a line-by-line diff of the original versus modified text, opened in your default web browser.
+
+- **Standalone Executable:**
   Easily build and distribute a single EXE file on Windows (with external configuration files).
 
 ## Requirements
@@ -62,6 +65,7 @@ clipboard-regex-replace/
 │   ├── app/                # Application core
 │   ├── clipboard/          # Clipboard handling
 │   ├── config/             # Configuration
+│   ├── diffutil/           # Diff generation utilities
 │   ├── hotkey/             # Hotkey management
 │   ├── resources/          # Embedded resources
 │   └── ui/                 # User interface
@@ -76,20 +80,20 @@ clipboard-regex-replace/
 
 ## Installation
 
-1. **Clone the Repository:**
+1.  **Clone the Repository:**
 
-   ```bash
-   git clone https://github.com/TanaroSch/Clipboard-Regex-Replace-2.git
-   cd Clipboard-Regex-Replace-2
-   ```
+    ```bash
+    git clone https://github.com/TanaroSch/Clipboard-Regex-Replace-2.git
+    cd Clipboard-Regex-Replace-2
+    ```
 
-2. **Download Dependencies:**
+2.  **Download Dependencies:**
 
-   The repository uses Go modules. The required dependencies will be fetched automatically when you build or run the project.
+    The repository uses Go modules. The required dependencies will be fetched automatically when you build or run the project.
 
-   ```bash
-   go mod tidy
-   ```
+    ```bash
+    go mod tidy
+    ```
 
 ## Configuration
 
@@ -175,12 +179,12 @@ Edit your `config.json` file to use the new format:
 
 ### Using Profiles
 
-1. **Triggering Specific Profiles**: Press the hotkey assigned to a profile to execute its replacements.
-2. **Toggling Profiles**: Enable or disable profiles via the "Profiles" submenu in the system tray.
-3. **Adding New Profiles**: Click "Add New Profile" in the system tray, then edit the config.json file to customize it.
-4. **Shared Hotkeys**: Multiple enabled profiles can share the same hotkey. When that hotkey is pressed, all the replacement rules from those profiles will be applied in sequence.
-5. **Bidirectional Replacements**: Set up a `reverse_hotkey` to enable going from replaced text back to original text.
-6. **Restarting the Application**: If you experience menu duplication issues, use the "Restart Application" option in the system tray.
+1.  **Triggering Specific Profiles**: Press the hotkey assigned to a profile to execute its replacements.
+2.  **Toggling Profiles**: Enable or disable profiles via the "Profiles" submenu in the system tray.
+3.  **Adding New Profiles**: Click "➕ Add New Profile" in the system tray, then edit the `config.json` file to customize it.
+4.  **Shared Hotkeys**: Multiple enabled profiles can share the same hotkey. When that hotkey is pressed, all the replacement rules from those profiles will be applied in sequence.
+5.  **Bidirectional Replacements**: Set up a `reverse_hotkey` to enable going from replaced text back to original text.
+6.  **Restarting the Application**: If you experience menu duplication issues after config changes, use the "Restart Application" option in the system tray.
 
 ### Migration from Previous Versions
 
@@ -251,52 +255,60 @@ This specifies that `GithubUser` should be reversed to `JohnDoe` (not `JohnDoe_T
 
 ## Usage
 
-1. **Running the Application:**  
-   You have two options for running the application:
+1.  **Running the Application:**
+    You have two options for running the application:
 
-   **Option 1:** During development, run it using Go:
+    **Option 1:** During development, run it using Go:
 
-   ```bash
-   go run cmd/clipregex/main.go
-   ```
+    ```bash
+    go run cmd/clipregex/main.go
+    ```
 
-   **Option 2:** Run the pre-compiled executable:
+    **Option 2:** Run the pre-compiled executable:
 
-   - Simply double-click the `ClipboardRegexReplace.exe` file
-   - Or create a shortcut to the executable and place it in your startup folder for automatic launch when Windows starts
+    - Simply double-click the `ClipboardRegexReplace.exe` file
+    - Or create a shortcut to the executable and place it in your startup folder for automatic launch when Windows starts
 
-   Either way, this will launch the application, register the hotkey, and show the system tray icon.
+    Either way, this will launch the application, register the hotkey, and show the system tray icon.
 
-2. **Triggering Clipboard Processing:**  
-   Copy some text, then press the configured hotkey (e.g., `Ctrl+Alt+V`). The application will:
+2.  **Triggering Clipboard Processing:**
+    Copy some text, then press the configured hotkey (e.g., `Ctrl+Alt+V`). The application will:
 
-   - Read your clipboard text.
-   - Apply the configured regex replacements from all enabled profiles with matching hotkey.
-   - Update the clipboard.
-   - Simulate a paste action.
-   - Display a toast notification (on Windows) indicating the number of replacements performed.
-   - If enabled, automatically revert to the original clipboard content after pasting or store it for manual reversion through the system tray menu or revert hotkey.
+    - Read your clipboard text.
+    - Apply the configured regex replacements from all enabled profiles with matching hotkey.
+    - Update the clipboard (if changes were made).
+    - Simulate a paste action.
+    - Display a toast notification (on Windows) indicating the number of replacements performed and prompting to view details.
+    - If enabled, automatically revert to the original clipboard content after pasting or store it for manual reversion through the system tray menu or revert hotkey.
+    - Make the "View Last Change Details" system tray option available if changes occurred.
 
-3. **Using Reverse Replacements (if configured):**  
-   Copy some text that contains previously replaced content, then press the reverse hotkey (e.g., `Shift+Alt+V`). The application will:
+3.  **Viewing Changes:**
+    After pressing a hotkey that results in clipboard changes:
+    - Right-click the system tray icon.
+    - Select **View Last Change Details**.
+    - This will open an HTML page in your default web browser showing a summary and a detailed diff of the changes.
 
-   - Replace any instances of replacement text with the original text.
-   - Maintain case patterns if case preservation is enabled.
+4.  **Using Reverse Replacements (if configured):**
+    Copy some text that contains previously replaced content, then press the reverse hotkey (e.g., `Shift+Alt+V`). The application will:
 
-4. **Reverting to Original Clipboard:**  
-   If automatic reversion is disabled but temporary clipboard is enabled, you can:
+    - Replace any instances of replacement text with the original text.
+    - Maintain case patterns if case preservation is enabled.
+    - The "View Last Change Details" option will also be available for reverse operations.
 
-   - Press the configured revert hotkey (e.g., `Ctrl+Shift+Alt+R`)
-   - Or right-click the system tray icon and select **Revert to Original**
+5.  **Reverting to Original Clipboard:**
+    If automatic reversion is disabled but temporary clipboard is enabled, you can:
 
-5. **Editing Configuration:**
-   To modify your `config.json` file, right-click the system tray icon and select **Open Config File**. This will attempt to open the file in your default text editor.
+    - Press the configured revert hotkey (e.g., `Ctrl+Shift+Alt+R`)
+    - Or right-click the system tray icon and select **Revert to Original**
 
-6. **Reloading Configuration:**
-   If you update your `config.json` file while the application is running, you can apply the changes without restarting by right-clicking the system tray icon and selecting **Reload Configuration**.
+6.  **Editing Configuration:**
+    To modify your `config.json` file, right-click the system tray icon and select **Open Config File**. This will attempt to open the file in your default text editor.
 
-7. **Exiting the Application:**  
-   Right-click the system tray icon and select **Quit** to exit.
+7.  **Reloading Configuration:**
+    If you update your `config.json` file while the application is running, you can apply the changes without restarting by right-clicking the system tray icon and selecting **Reload Configuration**.
+
+8.  **Exiting the Application:**
+    Right-click the system tray icon and select **Quit** to exit.
 
 ## Building for Windows
 
@@ -319,73 +331,81 @@ For distribution, include the following files:
 - [github.com/getlantern/systray](https://github.com/getlantern/systray) – System tray icon.
 - [github.com/go-toast/toast](https://github.com/go-toast/toast) – Windows toast notifications.
 - [golang.design/x/hotkey](https://pkg.go.dev/golang.design/x/hotkey) – Global hotkey registration.
+- [github.com/sergi/go-diff/diffmatchpatch](https://github.com/sergi/go-diff) – Text differencing library.
 
 ## Changelog
 
+### 1.5.4 (Current Version)
+
+-   **Feature: Change Details Viewer:** Added a "View Last Change Details" option to the system tray menu. When clicked after a replacement, it opens an HTML report in the browser showing a summary and detailed diff of the changes.
+-   **Refactor:** Improved diff generation logic for better accuracy and readability in HTML output.
+-   **Fix:** Resolved issues with opening configuration file and diff report on Windows by using the ShellExecuteW API directly within the UI package.
+-   **Refactor:** Moved platform-specific code (paste simulation, file opening) to dedicated files within relevant packages (`clipboard`, `ui`) using build tags.
+
 ### 1.5.3
 
-- **Open Configuration File:**
-  - Add option in system tray to quickly open ```config.json``` in the default text editor
+-   **Open Configuration File:**
+    - Add option in system tray to quickly open ```config.json``` in the default text editor
 
 ### 1.5.2
 
-- **Major Code Refactoring**:
-  - Reorganized project into a proper Go package structure
-  - Improved platform-specific clipboard paste handling
-  - Enhanced error handling and logging
-  - Better separation of concerns between packages
-  - No functional changes, purely architectural improvements
+-   **Major Code Refactoring**:
+    - Reorganized project into a proper Go package structure
+    - Improved platform-specific clipboard paste handling
+    - Enhanced error handling and logging
+    - Better separation of concerns between packages
+    - No functional changes, purely architectural improvements
 
 ### 1.5.1
 
-- **Global Revert Hotkey:**
-  Added support for a dedicated global hotkey that reverts the clipboard to its original content when automatic reversion is disabled.
+-   **Global Revert Hotkey:**
+    Added support for a dedicated global hotkey that reverts the clipboard to its original content when automatic reversion is disabled.
 
 ### 1.5.0
 
-- **Case-Preserving Replacements:**
-  Added support for maintaining capitalization patterns when replacing text (lowercase, UPPERCASE, Title Case, PascalCase).
-- **Bidirectional Replacements:**
-  Added `reverse_hotkey` to profiles for enabling reversible replacements.
-- **Custom Reverse Replacements:**
-  Added `reverse_with` field to override the default text used in reverse replacements.
+-   **Case-Preserving Replacements:**
+    Added support for maintaining capitalization patterns when replacing text (lowercase, UPPERCASE, Title Case, PascalCase).
+-   **Bidirectional Replacements:**
+    Added `reverse_hotkey` to profiles for enabling reversible replacements.
+-   **Custom Reverse Replacements:**
+    Added `reverse_with` field to override the default text used in reverse replacements.
 
 ### 1.4.0
 
-- **Multiple Profile Support:**
-  Added support for multiple named profiles, each with its own set of replacement rules and hotkey binding.
-- **Profile Management:**
-  Profiles can be toggled on/off directly from the system tray.
-- **Rule Merging:**
-  Profiles with the same hotkey have their replacement rules merged and applied sequentially.
+-   **Multiple Profile Support:**
+    Added support for multiple named profiles, each with its own set of replacement rules and hotkey binding.
+-   **Profile Management:**
+    Profiles can be toggled on/off directly from the system tray.
+-   **Rule Merging:**
+    Profiles with the same hotkey have their replacement rules merged and applied sequentially.
 
 ### 1.3.1
 
-- **Fixed Original Clipboard Storage:**  
-  Fixed an issue where pressing the hotkey multiple times on already processed text would incorrectly overwrite the stored original clipboard content. The application now properly preserves the original clipboard text until either new content is copied or new replacements are performed.
+-   **Fixed Original Clipboard Storage:**
+    Fixed an issue where pressing the hotkey multiple times on already processed text would incorrectly overwrite the stored original clipboard content. The application now properly preserves the original clipboard text until either new content is copied or new replacements are performed.
 
 ### 1.3.0
 
-- **Dynamic Configuration Reloading:**  
-  Added ability to reload configuration without restarting the application.
-- **Automatic Clipboard Reversion:**  
-  Added option to automatically restore the original clipboard content immediately after pasting.
-- **Simplified Clipboard Management:**  
-  Streamlined the clipboard restoration interface to a single "Revert to Original" option in the system tray.
+-   **Dynamic Configuration Reloading:**
+    Added ability to reload configuration without restarting the application.
+-   **Automatic Clipboard Reversion:**
+    Added option to automatically restore the original clipboard content immediately after pasting.
+-   **Simplified Clipboard Management:**
+    Streamlined the clipboard restoration interface to a single "Revert to Original" option in the system tray.
 
 ### 1.2.0
-- **Temporary Clipboard Storage:**  
-  Optionally store the original clipboard text before applying regex replacements. The replaced clipboard is pasted, and the original text is automatically restored after 10 seconds unless the user chooses to keep the replaced text.
-- **Interactive Options:**  
-  Added system tray menu items (and toast notification prompts on Windows) to allow users to revert to the original clipboard text or keep the replaced text.
-  
+-   **Temporary Clipboard Storage:**
+    Optionally store the original clipboard text before applying regex replacements. The replaced clipboard is pasted, and the original text is automatically restored after 10 seconds unless the user chooses to keep the replaced text.
+-   **Interactive Options:**
+    Added system tray menu items (and toast notification prompts on Windows) to allow users to revert to the original clipboard text or keep the replaced text.
+
 ### 1.1.0
-- Custom hotkey configuration.
-  
+-   Custom hotkey configuration.
+
 ### 1.0.0
-- Initial project.
-- Basic regex replacement.
-- Toast notification.
+-   Initial project.
+-   Basic regex replacement.
+-   Toast notification.
 
 ## License
 

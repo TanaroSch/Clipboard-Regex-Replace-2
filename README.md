@@ -33,11 +33,14 @@ Clipboard Regex Replace is a fast, standalone clipboard filtering application wr
 - **Dynamic Configuration Reloading:**  
   Reload configuration changes without restarting the application using the system tray menu.
 
+- **Open Configuration File:**
+  Quickly open your `config.json` file in the default text editor directly from the system tray menu.
+
 - **Windows Toast Notifications:**  
   Displays a toast notification to show successful replacement and configuration changes.
 
 - **System Tray Icon:**  
-  Runs in the background with a system tray icon and provides a menu for quick actions like reloading configuration, reverting clipboard, and exiting the application.
+  Runs in the background with a system tray icon and provides a menu for quick actions like opening the configuration file, reloading configuration, reverting clipboard, and exiting the application.
 
 - **Standalone Executable:**  
   Easily build and distribute a single EXE file on Windows (with external configuration files).
@@ -286,10 +289,13 @@ This specifies that `GithubUser` should be reversed to `JohnDoe` (not `JohnDoe_T
    - Press the configured revert hotkey (e.g., `Ctrl+Shift+Alt+R`)
    - Or right-click the system tray icon and select **Revert to Original**
 
-5. **Reloading Configuration:**  
+5. **Editing Configuration:**
+   To modify your `config.json` file, right-click the system tray icon and select **Open Config File**. This will attempt to open the file in your default text editor.
+
+6. **Reloading Configuration:**
    If you update your `config.json` file while the application is running, you can apply the changes without restarting by right-clicking the system tray icon and selecting **Reload Configuration**.
 
-6. **Exiting the Application:**  
+7. **Exiting the Application:**  
    Right-click the system tray icon and select **Quit** to exit.
 
 ## Building for Windows
@@ -315,6 +321,11 @@ For distribution, include the following files:
 - [golang.design/x/hotkey](https://pkg.go.dev/golang.design/x/hotkey) – Global hotkey registration.
 
 ## Changelog
+
+### 1.5.3
+
+- **Open Configuration File:**
+  - Add option in system tray to quickly open ```config.json``` in the default text editor
 
 ### 1.5.2
 

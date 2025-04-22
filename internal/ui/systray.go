@@ -1,3 +1,4 @@
+// ==== internal/ui/systray.go ====
 package ui
 
 import (
@@ -5,7 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
+	// "path/filepath" // Removed unused import
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ type SystrayManager struct {
 	onRestart      func()
 	onQuit         func()
 	onRevert       func()
+	onOpenConfig   func() // Callback to open config file
 	embeddedIcon   []byte
 	miRevert       *systray.MenuItem
 }
@@ -34,6 +36,7 @@ func NewSystrayManager(
 	onRestart func(),
 	onQuit func(),
 	onRevert func(),
+	onOpenConfig func(), // New parameter
 ) *SystrayManager {
 	return &SystrayManager{
 		config:         cfg,
@@ -42,8 +45,36 @@ func NewSystrayManager(
 		onRestart:      onRestart,
 		onQuit:         onQuit,
 		onRevert:       onRevert,
+		onOpenConfig:   onOpenConfig, // Assign new callback
 		embeddedIcon:   embeddedIcon,
 	}
+}
+
+// UpdateConfig updates the configuration used by the systray manager
+// and adjusts relevant UI elements. Note that this does *not* rebuild
+// the profile submenu, as that often requires an application restart.
+func (s *SystrayManager) UpdateConfig(newCfg *config.Config) {
+	log.Println("SystrayManager: Updating config reference.")
+	s.config = newCfg
+
+	// Update UI elements based on the new config
+	// Example: Re-evaluate the Revert menu item visibility/state
+	if s.miRevert != nil {
+		if s.config.TemporaryClipboard {
+			log.Println("SystrayManager: TemporaryClipboard is enabled in new config, ensuring Revert menu item exists (status unchanged for now).")
+			// The item already exists if miRevert is not nil.
+			// Its enabled/disabled status is handled separately by UpdateRevertStatus based on clipboard state,
+			// not directly by the config flag after initial creation.
+		} else {
+			log.Println("SystrayManager: TemporaryClipboard is disabled in new config. Disabling Revert menu item permanently.")
+			// Note: getlantern/systray doesn't directly support removing/hiding an existing item easily.
+			// Disabling it is the practical approach here. If the original state allows reverting,
+			// UpdateRevertStatus(false) might be called later, but this ensures it stays disabled if the feature is off.
+			s.miRevert.Disable()
+			// A more complex implementation might try to fully remove/re-add, but restart is safer.
+		}
+	}
+	// Other UI updates based on config could go here if needed.
 }
 
 // Run initializes and starts the system tray
@@ -54,9 +85,12 @@ func (s *SystrayManager) Run() {
 // UpdateRevertStatus enables or disables the revert menu item
 func (s *SystrayManager) UpdateRevertStatus(enabled bool) {
 	if s.miRevert != nil {
-		if enabled {
+		// Only allow enabling if the feature is enabled in the config
+		if enabled && s.config.TemporaryClipboard {
+			log.Println("SystrayManager: Enabling Revert menu item.")
 			s.miRevert.Enable()
 		} else {
+			log.Println("SystrayManager: Disabling Revert menu item.")
 			s.miRevert.Disable()
 		}
 	}
@@ -73,17 +107,25 @@ func (s *SystrayManager) onReady() {
 	miVersion := systray.AddMenuItem(fmt.Sprintf("Version: %s", s.version), "Clipboard Regex Replace version")
 	miVersion.Disable()
 
+	// --- Dynamic Menu Structure based on Config ---
+	// It's better to build the menu dynamically here based *initial* config
+	// as dynamically adding/removing top-level items later is tricky.
+
 	// Add profiles menu
-	s.updateProfileMenuItems()
+	s.updateProfileMenuItems() // This reads s.config internally
 
 	// Add configuration and application options
 	miReloadConfig := systray.AddMenuItem("Reload Configuration", "Reload configuration from config.json")
+	miOpenConfig := systray.AddMenuItem("Open Config File", "Open config.json in default editor")
 	miRestartApp := systray.AddMenuItem("Restart Application", "Completely restart the application to refresh menu")
 
-	// Add clipboard revert option if enabled
+	// Add clipboard revert option *only if* enabled in the initial config
 	if s.config.TemporaryClipboard {
+		log.Println("SystrayManager: TemporaryClipboard enabled, adding Revert menu item.")
 		s.miRevert = systray.AddMenuItem("Revert to Original", "Revert to original clipboard text")
 		s.miRevert.Disable() // Disabled initially until we have an original to revert to
+	} else {
+		log.Println("SystrayManager: TemporaryClipboard disabled, skipping Revert menu item creation.")
 	}
 
 	// Add quit option
@@ -99,6 +141,15 @@ func (s *SystrayManager) onReady() {
 	}()
 
 	go func() {
+		for range miOpenConfig.ClickedCh {
+			if s.onOpenConfig != nil {
+				log.Println("Open Config File menu item clicked.")
+				s.onOpenConfig()
+			}
+		}
+	}()
+
+	go func() {
 		for range miRestartApp.ClickedCh {
 			if s.onRestart != nil {
 				s.onRestart()
@@ -106,7 +157,8 @@ func (s *SystrayManager) onReady() {
 		}
 	}()
 
-	if s.config.TemporaryClipboard && s.miRevert != nil {
+	// Only create the channel listener if the menu item was created
+	if s.miRevert != nil {
 		go func() {
 			for range s.miRevert.ClickedCh {
 				if s.onRevert != nil {
@@ -132,109 +184,129 @@ func (s *SystrayManager) onExit() {
 }
 
 // updateProfileMenuItems creates submenu items for each profile
+// IMPORTANT: This builds the menu based on the config state *at the time it's called*.
+// It doesn't dynamically update if profiles are added/removed via config reload without restart.
 func (s *SystrayManager) updateProfileMenuItems() {
 	// Create a profiles submenu
 	miProfiles := systray.AddMenuItem("Profiles", "Manage replacement profiles")
 
 	// Add menu items for each profile
-	for i := range s.config.Profiles {
-		profile := &s.config.Profiles[i]
+	if len(s.config.Profiles) > 0 {
+		for i := range s.config.Profiles {
+			// Capture loop variable correctly for closure
+			profileIndex := i
 
-		// Create menu text
-		var menuText string
-		if profile.Enabled {
-			menuText = "✓ " + profile.Name
-		} else {
-			menuText = "  " + profile.Name
-		}
-
-		// Create menu item with tooltip
-		var tooltip string
-		if profile.ReverseHotkey != "" {
-			tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s, Reverse: %s)",
-				profile.Name, profile.Hotkey, profile.ReverseHotkey)
-		} else {
-			tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s)",
-				profile.Name, profile.Hotkey)
-		}
-
-		menuItem := miProfiles.AddSubMenuItem(menuText, tooltip)
-
-		// Handle clicks
-		go func(p *config.ProfileConfig, item *systray.MenuItem) {
-			for range item.ClickedCh {
-				// Toggle enabled status
-				p.Enabled = !p.Enabled
-
-				// Update menu text
-				if p.Enabled {
-					item.SetTitle("✓ " + p.Name)
-				} else {
-					item.SetTitle("  " + p.Name)
-				}
-
-				// Save config
-				if err := s.config.Save(); err != nil {
-					log.Printf("Failed to save config after toggling profile: %v", err)
-				}
-
-				// Notify user
-				status := map[bool]string{true: "enabled", false: "disabled"}[p.Enabled]
-				ShowNotification("Profile Updated",
-					fmt.Sprintf("Profile '%s' has been %s", p.Name, status))
-
-				// Reload config is called to re-register hotkeys
-				if s.onReloadConfig != nil {
-					s.onReloadConfig()
-				}
+			// Create menu text
+			menuText := "  " + s.config.Profiles[profileIndex].Name
+			if s.config.Profiles[profileIndex].Enabled {
+				menuText = "✓ " + s.config.Profiles[profileIndex].Name
 			}
-		}(profile, menuItem)
+
+			// Create menu item with tooltip
+			var tooltip string
+			profile := &s.config.Profiles[profileIndex] // Get pointer for use in goroutine
+			if profile.ReverseHotkey != "" {
+				tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s, Reverse: %s)",
+					profile.Name, profile.Hotkey, profile.ReverseHotkey)
+			} else {
+				tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s)",
+					profile.Name, profile.Hotkey)
+			}
+
+			menuItem := miProfiles.AddSubMenuItem(menuText, tooltip)
+
+			// Handle clicks - Toggle profile enable/disable
+			go func(item *systray.MenuItem) {
+				for range item.ClickedCh {
+					// Access profile via index from the *current* config, in case it was updated
+					if profileIndex >= len(s.config.Profiles) {
+						log.Printf("Error: Profile index %d out of bounds after config change.", profileIndex)
+						continue // Avoid panic if profile was removed during reload
+					}
+					p := &s.config.Profiles[profileIndex]
+
+					// Toggle enabled status
+					p.Enabled = !p.Enabled
+					log.Printf("Toggled profile '%s' to enabled=%t", p.Name, p.Enabled)
+
+					// Update menu text
+					newText := "  " + p.Name
+					if p.Enabled {
+						newText = "✓ " + p.Name
+					}
+					item.SetTitle(newText)
+
+					// Save config
+					if err := s.config.Save(); err != nil {
+						log.Printf("Failed to save config after toggling profile: %v", err)
+						// Optionally notify user of save error
+					}
+
+					// Notify user
+					status := map[bool]string{true: "enabled", false: "disabled"}[p.Enabled]
+					ShowNotification("Profile Updated",
+						fmt.Sprintf("Profile '%s' has been %s", p.Name, status))
+
+					// Reload config internally to re-register hotkeys based on new enabled state
+					// This avoids needing a full app restart just for toggling.
+					if s.onReloadConfig != nil {
+						log.Println("Triggering internal config reload after profile toggle to update hotkeys.")
+						s.onReloadConfig()
+					}
+				}
+			}(menuItem) // Pass menuItem to the goroutine
+		}
+	} else {
+		noProfilesItem := miProfiles.AddSubMenuItem("(No profiles defined)", "Add profiles in config.json")
+		noProfilesItem.Disable()
 	}
 
 	// Add a separator
-	miProfiles.AddSubMenuItem("----------", "")
+	// miProfiles.AddSeparator() // If this line causes compilation errors consistently...
+	// Workaround: Add a disabled item that looks like a separator
+	sepItem := miProfiles.AddSubMenuItem("----------", "Separator")
+	sepItem.Disable()
 
 	// Add new profile option
-	miAddProfile := miProfiles.AddSubMenuItem("➕ Add New Profile", "Create a new replacement profile")
+	miAddProfile := miProfiles.AddSubMenuItem("➕ Add New Profile", "Create a new replacement profile (Requires Restart)")
 
 	// Handle add profile clicks
 	go func() {
 		for range miAddProfile.ClickedCh {
-			// Create a new profile
+			// Create a new profile structure
 			newProfile := config.ProfileConfig{
-				Name:          fmt.Sprintf("New Profile %s", time.Now().Format("15:04:05")),
+				Name:          fmt.Sprintf("New Profile %s", time.Now().Format("150405")), // Compact time format
 				Enabled:       true,
-				Hotkey:        "ctrl+alt+n",
-				ReverseHotkey: "", // Empty by default
+				Hotkey:        "ctrl+alt+n", // Suggest a default, user must edit
+				ReverseHotkey: "",           // Empty by default
 				Replacements: []config.Replacement{
 					{
-						Regex:        "example",
-						ReplaceWith:  "replacement",
-						PreserveCase: false, // Default to false for backward compatibility
-						ReverseWith:  "",    // Empty by default
+						Regex:        "example regex",
+						ReplaceWith:  "example replacement",
+						PreserveCase: false,
+						ReverseWith:  "",
 					},
 				},
 			}
 
-			// Add to config
+			// Add to config in memory
 			s.config.Profiles = append(s.config.Profiles, newProfile)
 
-			// Save config
+			// Save config to file
 			if err := s.config.Save(); err != nil {
 				log.Printf("Failed to save config after adding profile: %v", err)
+				ShowNotification("Error", "Failed to save updated config file.")
+				// Decide not to restart if save failed? Or proceed anyway?
+			} else {
+				log.Printf("Added new profile '%s' and saved config.", newProfile.Name)
+				// Notify user that restart is needed because menu won't update automatically
+				ShowNotification("Profile Added",
+					fmt.Sprintf("New profile '%s' added to config.json. Please use 'Restart Application' menu item to see it in the list.", newProfile.Name))
 			}
 
-			// For adding profiles, we do need to restart to update the menu
-			ShowNotification("Profile Added",
-				fmt.Sprintf("New profile '%s' created. Restarting application to refresh menu.", newProfile.Name))
-
-			// Wait a moment for notification to show before restarting
-			time.Sleep(500 * time.Millisecond)
-			
-			// Call restart
-			if s.onRestart != nil {
-				s.onRestart()
-			}
+			// We do NOT call restart automatically here.
+			// Let the user trigger restart via the dedicated menu item after they've potentially
+			// edited the new profile's details in the config file.
 		}
 	}()
 }
@@ -243,12 +315,19 @@ func (s *SystrayManager) updateProfileMenuItems() {
 func IsDevMode() bool {
 	execPath, err := os.Executable()
 	if err != nil {
+		// Default to false if executable path cannot be determined
+		log.Printf("Warning: Could not get executable path in IsDevMode: %v", err)
 		return false
 	}
 
-	// Check if the executable is in a temporary directory, which indicates we're running via "go run"
+	// Check if the executable is in a temporary directory, common for "go run"
 	tempDir := os.TempDir()
-	return strings.Contains(strings.ToLower(execPath), strings.ToLower(tempDir))
+	isTemp := strings.Contains(strings.ToLower(execPath), strings.ToLower(tempDir))
+	log.Printf("IsDevMode check: Executable='%s', TempDir='%s', IsTemp=%t", execPath, tempDir, isTemp)
+	return isTemp
+
+	// Alternative check: Look for specific patterns if the temp dir check is unreliable
+	// return strings.Contains(execPath, "/go-build") || strings.Contains(execPath, "\\go-build") || strings.HasPrefix(filepath.Base(execPath), "main")
 }
 
 // RestartApplication restarts the current application
@@ -257,11 +336,9 @@ func RestartApplication() {
 
 	// Check if we're running in development mode (go run)
 	if IsDevMode() {
-		log.Println("Development mode detected. Instead of restarting, refreshing UI components...")
-
-		// In development mode, we won't actually restart
-		// Just return and let the caller handle UI refresh
-		ShowNotification("Dev Mode", "Menu changes will be visible after manually restarting the application")
+		log.Println("Development mode detected. Manual restart required.")
+		// In development mode, actually restarting the 'go run' process is complex and often unwanted.
+		ShowNotification("Restart Needed", "App is running via 'go run'. Please stop (Ctrl+C) and run it again manually.")
 		return
 	}
 
@@ -270,43 +347,44 @@ func RestartApplication() {
 	execPath, err := os.Executable()
 	if err != nil {
 		log.Printf("Error getting executable path: %v", err)
-		ShowNotification("Error", "Failed to restart application")
+		ShowNotification("Restart Error", "Failed to get executable path.")
 		return
 	}
 
-	// Get current working directory
+	// Get current working directory to preserve it for the new process
 	cwd, err := os.Getwd()
 	if err != nil {
 		log.Printf("Error getting current working directory: %v", err)
-		ShowNotification("Error", "Failed to restart application")
-		return
+		// Try to proceed without setting CWD, might work if config is relative to exe
+		cwd = "" // Or maybe return an error? For now, try proceeding.
+		ShowNotification("Restart Warning", "Could not get working directory, restart might fail.")
+		// return // Option: prevent restart if CWD fails
 	}
 
 	// Log paths for debugging
-	log.Printf("Executable path: %s", execPath)
-	log.Printf("Current working directory: %s", cwd)
-	log.Printf("Config should be at: %s", filepath.Join(cwd, "config.json"))
-
-	// Check if config file exists
-	if _, err := os.Stat(filepath.Join(cwd, "config.json")); err != nil {
-		log.Printf("Warning: Config file check failed: %v", err)
-	} else {
-		log.Printf("Config file exists and is accessible")
+	log.Printf("Attempting restart: Executable path: %s", execPath)
+	if cwd != "" {
+		log.Printf("Attempting restart: Setting working directory: %s", cwd)
 	}
 
-	// Start a new process with the same executable
+	// Prepare the command to run the executable again
 	cmd := exec.Command(execPath)
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = os.Stdout // Redirect stdout/stderr if needed for debugging the new instance
 	cmd.Stderr = os.Stderr
-	cmd.Dir = cwd // Set the working directory to the current directory
+	if cwd != "" {
+		cmd.Dir = cwd // Set the working directory
+	}
 
-	// Start the new process
+	// Start the new process without waiting for it
 	if err := cmd.Start(); err != nil {
 		log.Printf("Error starting new process: %v", err)
-		ShowNotification("Error", "Failed to restart application")
+		ShowNotification("Restart Error", "Failed to start new application process.")
 		return
 	}
 
-	// Exit the current process
-	os.Exit(0)
+	log.Println("Successfully started new process. Exiting current process.")
+	// Exit the current process cleanly
+	// Use systray.Quit() for graceful shutdown if possible, otherwise os.Exit(0)
+	// systray.Quit() // This might be called already by the Quit menu handler context
+	os.Exit(0) // Force exit if systray.Quit() isn't appropriate here
 }

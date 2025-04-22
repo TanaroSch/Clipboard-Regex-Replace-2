@@ -9,7 +9,7 @@ import (
 	"github.com/TanaroSch/clipboard-regex-replace/internal/config"
 )
 
-const version = "v1.5.2"
+const version = "v1.5.3"
 
 func main() {
 	log.Printf("Clipboard Regex Replace %s starting...", version)

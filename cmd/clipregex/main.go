@@ -11,7 +11,7 @@ import (
 	"github.com/TanaroSch/clipboard-regex-replace/internal/ui" // Needed for potential panic notification
 )
 
-const version = "v1.7.0" // Bump version for secret management feature
+const version = "v1.7.1" // Bump version for secret management feature
 
 func main() {
 	// Configure logging maybe? (e.g., write to file)

@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	//"runtime" // Keep runtime for OS checks in OpenFileInDefaultApp if needed elsewhere
+	//"regexp" // <-- Import regexp
 	"strings"
 	"time"
 
@@ -29,6 +29,7 @@ type SystrayManager struct {
 	onAddSecret      func() // Callback for Add/Update Secret
 	onListSecrets    func() // Callback for List Secrets
 	onRemoveSecret   func() // Callback for Remove Secret
+	onAddSimpleRule  func() // <-- Add callback for simple rule
 	embeddedIcon     []byte
 	miRevert         *systray.MenuItem
 	miViewLastDiff   *systray.MenuItem
@@ -46,10 +47,10 @@ func NewSystrayManager(
 	onRevert func(),
 	onOpenConfig func(),
 	onViewLastDiff func(),
-	// Add new parameters for secret management
 	onAddSecret func(),
 	onListSecrets func(),
 	onRemoveSecret func(),
+	onAddSimpleRule func(), // <-- Add parameter for simple rule callback
 ) *SystrayManager {
 	return &SystrayManager{
 		config:           cfg,
@@ -62,10 +63,10 @@ func NewSystrayManager(
 		onOpenConfig:     onOpenConfig,
 		onViewLastDiff:   onViewLastDiff,
 		profileMenuItems: make(map[int]*systray.MenuItem),
-		// Assign secret callbacks
-		onAddSecret:    onAddSecret,
-		onListSecrets:  onListSecrets,
-		onRemoveSecret: onRemoveSecret,
+		onAddSecret:      onAddSecret,
+		onListSecrets:    onListSecrets,
+		onRemoveSecret:   onRemoveSecret,
+		onAddSimpleRule:  onAddSimpleRule, // <-- Store the callback
 	}
 }
 
@@ -168,25 +169,26 @@ func (s *SystrayManager) onReady() {
 	systray.AddSeparator()
 
 	// Build the profile submenu
-	s.updateProfileMenuItems()
+	s.updateProfileMenuItems() // This already has "Add New Profile"
 	systray.AddSeparator()
 
 	// --- Add Secret Management Menu ---
-	// Menu items are always enabled now, rely on zenity dialogs
 	miManageSecrets := systray.AddMenuItem("Manage Secrets", "Add/Remove sensitive values")
 	miAddSecret := miManageSecrets.AddSubMenuItem("Add/Update Secret...", "Store a new sensitive value")
 	miListSecrets := miManageSecrets.AddSubMenuItem("List Secret Names", "Show names of stored secrets")
 	miRemoveSecret := miManageSecrets.AddSubMenuItem("Remove Secret...", "Delete a stored secret")
-	// --- End Secret Management Menu ---
+
+	// --- Add Simple Rule Menu Item ---
+	miAddSimpleRule := systray.AddMenuItem("Add Simple Rule...", "Add a 1:1 text replacement rule to a profile") // <-- New Item
 
 	systray.AddSeparator()
 
 	// Config & App Control - Update tooltips for restart requirement
-	miReloadConfig := systray.AddMenuItem("Reload Configuration", "Reload config (manual restart needed for new secrets)")
+	miReloadConfig := systray.AddMenuItem("Reload Configuration", "Reload config (manual restart needed for new secrets/hotkeys)")
 	miOpenConfig := systray.AddMenuItem("Open Config File", "Open config.json in default editor")
 	s.miViewLastDiff = systray.AddMenuItem("View Last Change Details", "Show differences from the last replacement")
 	s.miViewLastDiff.Disable()
-	miRestartApp := systray.AddMenuItem("Restart Application", "Restart (needed after adding/removing secrets)")
+	miRestartApp := systray.AddMenuItem("Restart Application", "Restart (needed after adding/removing secrets or profiles)")
 
 	// Revert Option
 	if s.config != nil && s.config.TemporaryClipboard {
@@ -202,19 +204,92 @@ func (s *SystrayManager) onReady() {
 
 	// --- Set up menu handlers in goroutines ---
 
-	go func() { for range miReloadConfig.ClickedCh { log.Println("Reload Configuration menu item clicked."); if s.onReloadConfig != nil { s.onReloadConfig() } } }()
-	go func() { for range miOpenConfig.ClickedCh { log.Println("Open Config File menu item clicked."); if s.onOpenConfig != nil { s.onOpenConfig() } } }()
-	if s.miViewLastDiff != nil && s.onViewLastDiff != nil { go func() { for range s.miViewLastDiff.ClickedCh { log.Println("View Last Change Details menu item clicked."); s.onViewLastDiff() } }() }
-	go func() { for range miRestartApp.ClickedCh { log.Println("Restart Application menu item clicked."); if s.onRestart != nil { s.onRestart() } } }()
-	if s.miRevert != nil && s.onRevert != nil { go func() { for range s.miRevert.ClickedCh { log.Println("Revert to Original menu item clicked."); s.onRevert() } }() }
+	go func() {
+		for range miReloadConfig.ClickedCh {
+			log.Println("Reload Configuration menu item clicked.")
+			if s.onReloadConfig != nil {
+				s.onReloadConfig()
+			}
+		}
+	}()
+	go func() {
+		for range miOpenConfig.ClickedCh {
+			log.Println("Open Config File menu item clicked.")
+			if s.onOpenConfig != nil {
+				s.onOpenConfig()
+			}
+		}
+	}()
+	if s.miViewLastDiff != nil && s.onViewLastDiff != nil {
+		go func() {
+			for range s.miViewLastDiff.ClickedCh {
+				log.Println("View Last Change Details menu item clicked.")
+				s.onViewLastDiff()
+			}
+		}()
+	}
+	go func() {
+		for range miRestartApp.ClickedCh {
+			log.Println("Restart Application menu item clicked.")
+			if s.onRestart != nil {
+				s.onRestart()
+			}
+		}
+	}()
+	if s.miRevert != nil && s.onRevert != nil {
+		go func() {
+			for range s.miRevert.ClickedCh {
+				log.Println("Revert to Original menu item clicked.")
+				s.onRevert()
+			}
+		}()
+	}
 
-	// Secret Handlers (callbacks defined in app.go, which now use zenity)
-	if s.onAddSecret != nil { go func() { for range miAddSecret.ClickedCh { log.Println("Add/Update Secret menu item triggered."); s.onAddSecret() } }() }
-	if s.onListSecrets != nil { go func() { for range miListSecrets.ClickedCh { log.Println("List Secret Names menu item triggered."); s.onListSecrets() } }() }
-	if s.onRemoveSecret != nil { go func() { for range miRemoveSecret.ClickedCh { log.Println("Remove Secret menu item triggered."); s.onRemoveSecret() } }() }
+	// Secret Handlers
+	if s.onAddSecret != nil {
+		go func() {
+			for range miAddSecret.ClickedCh {
+				log.Println("Add/Update Secret menu item triggered.")
+				s.onAddSecret()
+			}
+		}()
+	}
+	if s.onListSecrets != nil {
+		go func() {
+			for range miListSecrets.ClickedCh {
+				log.Println("List Secret Names menu item triggered.")
+				s.onListSecrets()
+			}
+		}()
+	}
+	if s.onRemoveSecret != nil {
+		go func() {
+			for range miRemoveSecret.ClickedCh {
+				log.Println("Remove Secret menu item triggered.")
+				s.onRemoveSecret()
+			}
+		}()
+	}
+
+	// Add Simple Rule Handler <-- New Handler
+	if s.onAddSimpleRule != nil {
+		go func() {
+			for range miAddSimpleRule.ClickedCh {
+				log.Println("'Add Simple Rule...' menu item triggered.")
+				s.onAddSimpleRule()
+			}
+		}()
+	}
 
 	// Quit Handler
-	go func() { <-miQuit.ClickedCh; log.Println("Quit menu item clicked."); if s.onQuit != nil { s.onQuit() }; systray.Quit() }()
+	go func() {
+		<-miQuit.ClickedCh
+		log.Println("Quit menu item clicked.")
+		if s.onQuit != nil {
+			s.onQuit()
+		}
+		systray.Quit()
+	}()
 
 	log.Println("Systray ready and menu configured.")
 }
@@ -230,39 +305,124 @@ func (s *SystrayManager) updateProfileMenuItems() {
 	miProfiles := systray.AddMenuItem("Profiles", "Manage replacement profiles")
 	if s.config != nil && len(s.config.Profiles) > 0 {
 		for i := range s.config.Profiles {
-			profileIndex := i
-			if profileIndex >= len(s.config.Profiles) { continue }
+			profileIndex := i // Capture index for goroutine closure
+			if profileIndex >= len(s.config.Profiles) {
+				continue // Safety check in case config changes during loop setup
+			}
 			profile := s.config.Profiles[profileIndex]
 			menuText := "  " + profile.Name
-			if profile.Enabled { menuText = "✓ " + profile.Name }
+			if profile.Enabled {
+				menuText = "✓ " + profile.Name
+			}
 			var tooltip string
-			if profile.ReverseHotkey != "" { tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s, Reverse: %s)", profile.Name, profile.Hotkey, profile.ReverseHotkey)
-			} else { tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s)", profile.Name, profile.Hotkey) }
+			if profile.ReverseHotkey != "" {
+				tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s, Reverse: %s)", profile.Name, profile.Hotkey, profile.ReverseHotkey)
+			} else {
+				tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s)", profile.Name, profile.Hotkey)
+			}
 			menuItem := miProfiles.AddSubMenuItem(menuText, tooltip)
 			s.profileMenuItems[profileIndex] = menuItem
+
 			go func(item *systray.MenuItem, idx int) {
 				for range item.ClickedCh {
-					if s.config == nil || idx >= len(s.config.Profiles) { log.Printf("Error: Profile index %d out of bounds or config nil after config change. Cannot toggle.", idx); ShowNotification("Menu Inconsistency", "Profile list changed. Please use Reload or Restart."); continue }
-					p := &s.config.Profiles[idx]
+					// --- Safely access config and profile ---
+					if s.config == nil || s.config.Profiles == nil || idx >= len(s.config.Profiles) {
+						log.Printf("Error: Profile index %d out of bounds or config nil after config change. Cannot toggle.", idx)
+						ShowNotification("Menu Inconsistency", "Profile list changed. Please use Reload or Restart.")
+						continue
+					}
+					p := &s.config.Profiles[idx] // Get pointer to modify directly
+
+					// --- Toggle State ---
 					p.Enabled = !p.Enabled
 					log.Printf("Toggled profile '%s' to enabled=%t", p.Name, p.Enabled)
+
+					// --- Update Menu Item Visual ---
 					newText := "  " + p.Name
-					if p.Enabled { newText = "✓ " + p.Name }
+					if p.Enabled {
+						newText = "✓ " + p.Name
+					}
 					item.SetTitle(newText)
-					if err := s.config.Save(); err != nil { log.Printf("Failed to save config after toggling profile '%s': %v", p.Name, err); ShowNotification("Save Error", fmt.Sprintf("Failed to save config after toggling '%s'", p.Name))
-					} else { status := map[bool]string{true: "enabled", false: "disabled"}[p.Enabled]; ShowNotification("Profile Updated", fmt.Sprintf("Profile '%s' has been %s. Reloading...", p.Name, status)); if s.onReloadConfig != nil { log.Println("Triggering internal config reload after profile toggle to update hotkeys."); time.Sleep(150 * time.Millisecond); s.onReloadConfig() } }
+
+					// --- Save Config ---
+					if err := s.config.Save(); err != nil {
+						log.Printf("Failed to save config after toggling profile '%s': %v", p.Name, err)
+						ShowNotification("Save Error", fmt.Sprintf("Failed to save config after toggling '%s'", p.Name))
+						// Optionally attempt to revert in-memory state
+						p.Enabled = !p.Enabled
+						newText = "  " + p.Name
+						if p.Enabled { newText = "✓ " + p.Name }
+						item.SetTitle(newText)
+					} else {
+						// --- Notify & Reload ---
+						status := map[bool]string{true: "enabled", false: "disabled"}[p.Enabled]
+						ShowNotification("Profile Updated", fmt.Sprintf("Profile '%s' has been %s. Reloading...", p.Name, status))
+						if s.onReloadConfig != nil {
+							log.Println("Triggering internal config reload after profile toggle to update hotkeys.")
+							// Slight delay to allow notification to potentially show first
+							time.Sleep(150 * time.Millisecond)
+							s.onReloadConfig()
+						}
+					}
 				}
 			}(menuItem, profileIndex)
 		}
-	} else { log.Println("No profiles defined in config or config is nil."); noProfilesItem := miProfiles.AddSubMenuItem("(No profiles defined)", "Add profiles in config.json"); noProfilesItem.Disable() }
-	sepItem := miProfiles.AddSubMenuItem("----------", "Separator"); sepItem.Disable()
+	} else {
+		log.Println("No profiles defined in config or config is nil.")
+		noProfilesItem := miProfiles.AddSubMenuItem("(No profiles defined)", "Add profiles in config.json")
+		noProfilesItem.Disable()
+	}
+	sepItem := miProfiles.AddSubMenuItem("----------", "Separator")
+	sepItem.Disable()
 	miAddProfile := miProfiles.AddSubMenuItem("➕ Add New Profile", "Adds a template profile to config.json (Restart Recommended)")
 	go func() {
 		for range miAddProfile.ClickedCh {
-			log.Println("'Add New Profile' clicked."); if s.config == nil { log.Println("Error: Cannot add profile, config is nil."); ShowNotification("Internal Error", "Application configuration not loaded."); continue }
-			newProfileName := fmt.Sprintf("New_Profile_%s", time.Now().Format("150405")); newProfile := config.ProfileConfig{ Name: newProfileName, Enabled: true, Hotkey: "ctrl+alt+n", Replacements: []config.Replacement{{ Regex: fmt.Sprintf("text_for_%s", newProfileName), ReplaceWith: "replacement_text",}} }; s.config.Profiles = append(s.config.Profiles, newProfile)
-			if err := s.config.Save(); err != nil { log.Printf("Failed to save config after adding new profile template: %v", err); ShowNotification("Error Adding Profile", "Failed to save updated config file."); if len(s.config.Profiles) > 0 { s.config.Profiles = s.config.Profiles[:len(s.config.Profiles)-1] }
-			} else { log.Printf("Added new profile template '%s' and saved config.", newProfile.Name); ShowNotification("Profile Template Added", fmt.Sprintf("Template '%s' added. Edit config.json and use 'Reload' or 'Restart Application'.", newProfile.Name)) }
+			log.Println("'Add New Profile' clicked.")
+			if s.config == nil {
+				log.Println("Error: Cannot add profile, config is nil.")
+				ShowNotification("Internal Error", "Application configuration not loaded.")
+				continue
+			}
+			// Ensure unique name generation remains robust even with frequent additions
+			baseName := "New_Profile"
+			existingNames := make(map[string]bool)
+			if s.config.Profiles != nil {
+				for _, p := range s.config.Profiles {
+					existingNames[p.Name] = true
+				}
+			}
+
+			newProfileName := baseName
+			counter := 1
+			for existingNames[newProfileName] {
+				newProfileName = fmt.Sprintf("%s_%d", baseName, counter)
+				counter++
+			}
+
+			newProfile := config.ProfileConfig{
+				Name:    newProfileName,
+				Enabled: true,
+				Hotkey:  "ctrl+alt+n", // Default new hotkey, might need adjustment by user
+				Replacements: []config.Replacement{
+					{
+						Regex:       fmt.Sprintf("text_for_%s", newProfileName),
+						ReplaceWith: "replacement_text",
+					},
+				},
+			}
+			s.config.Profiles = append(s.config.Profiles, newProfile)
+			if err := s.config.Save(); err != nil {
+				log.Printf("Failed to save config after adding new profile template: %v", err)
+				ShowNotification("Error Adding Profile", "Failed to save updated config file.")
+				// Roll back in-memory change on save failure
+				if len(s.config.Profiles) > 0 {
+					s.config.Profiles = s.config.Profiles[:len(s.config.Profiles)-1]
+				}
+			} else {
+				log.Printf("Added new profile template '%s' and saved config.", newProfile.Name)
+				ShowNotification("Profile Template Added", fmt.Sprintf("Template '%s' added. Edit config.json and use 'Reload' or 'Restart Application'.", newProfile.Name))
+				// Note: The menu won't update automatically without a restart or explicit refresh logic
+			}
 		}
 	}()
 }
@@ -284,8 +444,11 @@ func IsDevMode() bool {
 	}
 	// Fallback: Check if it's in the general temp directory
 	tempDir := os.TempDir()
-	if strings.HasPrefix(filepath.Clean(filepath.Dir(execPath)), filepath.Clean(tempDir)) {
-		log.Printf("IsDevMode check: Executable path (%s) is within Temp directory (%s). Assuming Dev Mode.", execPath, tempDir)
+	// Ensure paths are clean and compare directory prefixes
+	cleanedExecDir := filepath.Clean(filepath.Dir(execPath))
+	cleanedTempDir := filepath.Clean(tempDir)
+	if strings.HasPrefix(cleanedExecDir, cleanedTempDir) {
+		log.Printf("IsDevMode check: Executable path (%s) is within Temp directory (%s). Assuming Dev Mode.", cleanedExecDir, cleanedTempDir)
 		return true
 	}
 	log.Printf("IsDevMode check: Executable='%s'. Assuming Production Mode.", execPath)
@@ -329,7 +492,6 @@ func RestartApplication() {
 		return
 	}
 	log.Println("Successfully started new process. Exiting current process now.")
-	os.Exit(0)
+	systray.Quit() // Use systray.Quit() to try and trigger onExit cleanly
+	os.Exit(0)     // Fallback exit
 }
-
-// *** IsConsoleLikelyAvailable function is removed ***

@@ -1,6 +1,6 @@
 # Clipboard Regex Replace
 
-Clipboard Regex Replace is a fast, standalone clipboard filtering application written in Go. It automatically applies a series of regex-based replacements to your clipboard text when you press a global hotkey, then updates your clipboard and simulates a paste action. Additionally, it provides Windows toast notifications, a system tray icon for easy management, a detailed diff view for analyzing changes, and secure storage for sensitive replacement values.
+Clipboard Regex Replace is a fast, standalone clipboard filtering application written in Go. It automatically applies a series of regex-based replacements to your clipboard text when you press a global hotkey, then updates your clipboard and simulates a paste action. Additionally, it provides Windows toast notifications, a system tray icon for easy management, a detailed diff view for analyzing changes, secure storage for sensitive replacement values, and tools for quickly adding common rules.
 
 > **Note:** This implementation is a major upgrade compared to the initial Python implementation in [Clipboard-Regex-Replace](https://github.com/TanaroSch/Cliboard-Regex-Replace). It's designed to be lightweight, efficient, and easy to distribute as a single executable (with only external configuration).
 
@@ -17,6 +17,9 @@ Clipboard Regex Replace is a fast, standalone clipboard filtering application wr
 
 - **Secret Placeholders:**
   Reference stored secrets within your regex replacement rules using `{{secret_name}}` syntax.
+
+- **Simple Rule Addition:**
+  Quickly add basic 1:1 text replacement rules to a selected profile directly from the system tray menu using native dialogs.
 
 - **Clipboard Automation:**
   Automatically updates your clipboard content and simulates a paste.
@@ -46,7 +49,7 @@ Clipboard Regex Replace is a fast, standalone clipboard filtering application wr
   Displays a toast notification to show successful replacement and configuration changes. The notification now prompts to view changes via the systray.
 
 - **System Tray Icon:**
-  Runs in the background with a system tray icon and provides a menu for quick actions like managing secrets, opening the configuration file, reloading configuration, viewing last changes, reverting clipboard, and exiting the application.
+  Runs in the background with a system tray icon and provides a menu for quick actions like managing secrets, adding simple rules, opening the configuration file, reloading configuration, viewing last changes, reverting clipboard, and exiting the application.
 
 - **Change Details Viewer:**
   After a replacement occurs, view a detailed HTML report showing a summary of changes and a line-by-line diff of the original versus modified text, opened in your default web browser.
@@ -200,6 +203,23 @@ To avoid storing sensitive data (like passwords, API keys, emails) directly in `
 -   **List Secret Names**: Shows a notification and logs the logical names of all secrets currently managed by the application (reads from the `secrets` map in `config.json`). It does *not* display the secret values.
 -   **Remove Secret...**: Prompts you to select one of the managed logical names. Upon confirmation, it removes the secret from the OS keychain/credential store and removes its entry from the `secrets` map in `config.json`. **This action cannot be undone.**
 
+## Adding Simple Rules via System Tray
+
+For common cases where you want to replace one specific piece of text with another, you can use the "Add Simple Rule..." option in the system tray menu.
+
+### How it Works
+
+1.  **Select Profile:** You'll first be asked to choose which existing profile you want to add the rule to.
+2.  **Enter Source Text:** Provide the exact text you want to find and replace. Any special characters you enter here will be treated literally (they won't act as regex commands).
+3.  **Enter Replacement Text:** Provide the text you want to replace the source text with. This can be empty if you want to delete the source text.
+4.  **Case Sensitivity:** You'll be asked (Yes/No) if the rule should be case-insensitive.
+    *   **Yes:** The rule will match the source text regardless of whether it's uppercase or lowercase (e.g., "source" would match "source", "Source", "SOURCE", etc.). This adds `(?i)` to the beginning of the generated regex.
+    *   **No:** The rule will only match the source text with the exact casing you entered.
+5.  **Rule Added:** The application constructs the appropriate regex rule (e.g., `(?i)My literal text` or `My literal text`) and adds it to the end of the selected profile's `replacements` list in your `config.json` file. The `preserve_case` option is automatically set to `false` for these simple rules.
+6.  **Reload Config:** After adding a rule, you should use the "Reload Configuration" menu item (or restart the application) for the new rule to become active.
+
+This provides a quick way to add basic replacements without manually editing the `config.json` file and escaping regex characters. For more complex patterns, you'll still need to edit the configuration file directly.
+
 ## Multiple Profile Support
 
 Clipboard Regex Replace supports multiple configuration profiles. Each profile can have its own set of replacement patterns and hotkey bindings.
@@ -310,33 +330,39 @@ Now, `shift+alt+v` would reverse `GithubUser` to `JohnDoe`.
     - Optionally create a basic replacement rule.
     - **Important:** **Manually restart the application** for the new secret to be usable in replacements.
 
-3.  **Triggering Clipboard Processing:**
+3.  **Adding a Simple Rule:** (New in v1.7.1)
+    - Right-click the system tray icon.
+    - Select **Add Simple Rule...**.
+    - Follow the prompts to select a profile, enter source text, replacement text, and choose case sensitivity.
+    - Use **Reload Configuration** from the system tray menu to activate the new rule without restarting.
+
+4.  **Triggering Clipboard Processing:**
     - Copy some text.
     - Press a configured hotkey (e.g., `Ctrl+Alt+V`).
     - The application reads the clipboard, resolves any `{{...}}` placeholders using secrets from the OS keychain, applies matching regex rules, updates the clipboard, simulates paste, and shows notifications.
 
-4.  **Viewing Changes:**
+5.  **Viewing Changes:**
     - Right-click the system tray icon after a replacement.
     - Select **View Last Change Details**. Opens a diff report in your browser.
 
-5.  **Using Reverse Replacements (if configured):**
+6.  **Using Reverse Replacements (if configured):**
     - Copy text containing previously replaced content.
     - Press the configured reverse hotkey.
     - The application resolves secrets needed for the reverse mapping and applies the rules.
 
-6.  **Reverting to Original Clipboard:**
+7.  **Reverting to Original Clipboard:**
     - Use the global revert hotkey (if configured) or the **Revert to Original** systray menu item (if temporary clipboard is enabled).
 
-7.  **Editing Configuration:**
+8.  **Editing Configuration:**
     - Right-click the systray icon -> **Open Config File**.
 
-8.  **Reloading Configuration:**
+9.  **Reloading Configuration:**
     - Right-click the systray icon -> **Reload Configuration**. Applies changes from `config.json` (like modified rules, profile toggles) **except** for newly added or removed secrets.
 
-9.  **Restarting Application:**
+10. **Restarting Application:**
     - Right-click the systray icon -> **Restart Application**. Recommended after making significant profile changes.
 
-10. **Exiting the Application:**
+11. **Exiting the Application:**
     - Right-click the systray icon -> **Quit**.
 
 ## Building for Windows
@@ -367,7 +393,14 @@ For distribution, include the following files:
 
 ## Changelog
 
-### 1.7.0 (Current Version)
+### 1.7.1 (Current Version)
+
+-   **Feature: Add Simple Rule:**
+    -   Added "Add Simple Rule..." option to the system tray menu.
+    -   Uses native dialogs (`zenity`) to prompt for profile selection, source text, replacement text, and case sensitivity.
+    -   Automatically creates a 1:1 replacement rule (escaping source text for regex) in the selected profile and saves `config.json`.
+
+### 1.7.0
 
 -   **Feature: Secure Secret Management:**
     -   Store sensitive replacement values securely in the OS native credential store (keychain/credential manager).

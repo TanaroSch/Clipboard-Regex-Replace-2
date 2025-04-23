@@ -1,13 +1,12 @@
+// ==== internal/clipboard/clipboard.go ====
 package clipboard
 
 import (
+	"errors"
 	"fmt"
 	"log"
-	"os/exec"
 	"regexp"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 	"unicode"
 
@@ -17,154 +16,256 @@ import (
 
 // Manager handles clipboard operations and transformations
 type Manager struct {
-	previousClipboard       string
+	previousClipboard        string
 	lastTransformedClipboard string
-	config                  *config.Config
-	onRevertStatusChange    func(bool)
+	config                   *config.Config // Holds the overall config reference
+	onRevertStatusChange     func(bool)
+	lastOriginalForDiff      string
+	lastModifiedForDiff      string
+	resolvedSecrets          map[string]string // Added: Runtime secrets
 }
 
 // NewManager creates a new clipboard manager
-func NewManager(cfg *config.Config, onRevertStatusChange func(bool)) *Manager {
+func NewManager(cfg *config.Config, resolvedSecrets map[string]string, onRevertStatusChange func(bool)) *Manager { // Added resolvedSecrets param
 	return &Manager{
-		config:               cfg,
+		config:               cfg, // Store the main config reference
+		resolvedSecrets:      resolvedSecrets, // Store secrets map
 		onRevertStatusChange: onRevertStatusChange,
 	}
 }
 
+// UpdateResolvedSecrets allows updating the secrets map after config reload.
+func (m *Manager) UpdateResolvedSecrets(newSecrets map[string]string) { // Added
+	m.resolvedSecrets = newSecrets
+	log.Println("Clipboard Manager: Updated resolved secrets.")
+}
+
+// GetLastDiff returns the last pair of original/modified text for diffing.
+func (m *Manager) GetLastDiff() (original string, modified string, ok bool) {
+	if m.lastOriginalForDiff != "" || m.lastModifiedForDiff != "" {
+		return m.lastOriginalForDiff, m.lastModifiedForDiff, true
+	}
+	return "", "", false
+}
+
+// --- Secret Placeholder Handling ---
+
+var secretPlaceholderRegex = regexp.MustCompile(`\{\{([a-zA-Z0-9_]+)\}\}`)
+var ErrSecretNotFound = errors.New("secret placeholder not found in resolved secrets")
+
+// resolvePlaceholders replaces {{placeholder}} with actual secret values.
+// Returns the resolved string and an error if any placeholder could not be resolved.
+func resolvePlaceholders(text string, secrets map[string]string, escapeForRegex bool) (string, error) {
+	var firstError error
+	result := secretPlaceholderRegex.ReplaceAllStringFunc(text, func(match string) string {
+		// If an error already occurred, stop trying to replace
+		if firstError != nil {
+			return match
+		}
+
+		parts := secretPlaceholderRegex.FindStringSubmatch(match)
+		if len(parts) != 2 {
+			log.Printf("Internal Error: Failed parsing placeholder match '%s' with regex '%s'", match, secretPlaceholderRegex.String())
+			// This indicates a bug in the regex or matching logic, treat as unresolved
+			firstError = fmt.Errorf("internal error parsing placeholder match: %s", match)
+			return match // Return placeholder unmodified
+		}
+		name := parts[1]
+
+		secretValue, found := secrets[name]
+		if !found {
+			// Log the error and set firstError
+			log.Printf("Error: Secret placeholder '{{%s}}' found, but secret not loaded/found in map.", name)
+			firstError = fmt.Errorf("%w: {{%s}}", ErrSecretNotFound, name) // Use wrapped error
+			return match // Return placeholder unmodified
+		}
+
+		if escapeForRegex {
+			return regexp.QuoteMeta(secretValue)
+		}
+		return secretValue
+	})
+
+	return result, firstError // Return the processed string and the first error encountered (if any)
+}
+
+// --- End Secret Placeholder Handling ---
+
 // ProcessClipboard reads, transforms, and pastes clipboard content
-// Returns a notification message if replacements were made
-func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) string {
-	// Read the current clipboard content
+func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message string, changedForDiff bool) {
 	origText, err := clipboard.ReadAll()
 	if err != nil {
 		log.Printf("Failed to read clipboard: %v", err)
-		return "" // Early return needs to return a string
+		return "", false
 	}
 
-	// Determine if this is new content or our previously transformed content
 	isNewContent := m.lastTransformedClipboard == "" || origText != m.lastTransformedClipboard
-
-	// Start with original text for transformation
 	newText := origText
 	totalReplacements := 0
-
-	// Track which profiles are being used
 	var activeProfiles []string
 
 	// Apply replacements from all enabled profiles that match this hotkey
-	for _, profile := range m.config.Profiles {
+	for _, profile := range m.config.Profiles { // Iterate using the config stored in the manager
 		if !profile.Enabled {
 			continue
 		}
 
-		// Check if this profile matches the pressed hotkey
 		if (profile.Hotkey == hotkeyStr && !isReverse) ||
 			(profile.ReverseHotkey == hotkeyStr && isReverse) {
 			activeProfiles = append(activeProfiles, profile.Name)
 			profileReplacements := 0
 
-			// Apply each regex replacement rule from this profile
-			for _, rep := range profile.Replacements {
+			for ruleIndex, rep := range profile.Replacements { // Use index for better logging
 				var replaced string
 				var replacedCount int
+				var errReplace error // Capture errors from replacement functions
 
 				if !isReverse {
-					// Forward replacement
-					replaced, replacedCount = m.applyForwardReplacement(newText, rep)
+					// Pass manager's resolvedSecrets implicitly via method receiver
+					replaced, replacedCount, errReplace = m.applyForwardReplacement(newText, rep)
 				} else {
-					// Reverse replacement
-					replaced, replacedCount = m.applyReverseReplacement(newText, rep)
+					// Pass manager's resolvedSecrets implicitly via method receiver
+					replaced, replacedCount, errReplace = m.applyReverseReplacement(newText, rep)
 				}
 
-				newText = replaced
-				profileReplacements += replacedCount
-				totalReplacements += replacedCount
-			}
+				if errReplace != nil {
+					log.Printf("Error applying replacement rule #%d (Profile: %s, Regex: %s): %v. Skipping rule.", ruleIndex+1, profile.Name, rep.Regex, errReplace)
+					continue // Skip this rule if secrets couldn't be resolved or regex invalid
+				}
+
+				// Only count if the text actually changed
+				if replaced != newText {
+					// Accumulate counts only if text actually changed for this rule
+					if replacedCount > 0 {
+						profileReplacements += replacedCount
+					} else {
+						// If count is 0 but text changed (e.g. empty match replaced), count as 1 change?
+						// Let's stick to counting based on regex matches reported by apply* funcs for now.
+					}
+					totalReplacements += replacedCount // Accumulate total replacements counted
+					newText = replaced                 // Update text only if changed
+				}
+			} // End loop over replacements in profile
 
 			directionText := "forward"
 			if isReverse {
 				directionText = "reverse"
 			}
+			if profileReplacements > 0 {
+				log.Printf("Applied %d %s replacement(s) from profile '%s'",
+					profileReplacements, directionText, profile.Name)
+			} else {
+                 log.Printf("Profile '%s' (%s) matched hotkey, but no replacements were made.", profile.Name, directionText)
+            }
+		} // End check for matching hotkey
+	} // End loop over profiles
 
-			log.Printf("Applied %d %s replacements from profile '%s'",
-				profileReplacements, directionText, profile.Name)
+	// --- Temporary clipboard logic ---
+	// Use m.config for flags
+	if m.config.TemporaryClipboard {
+		if isNewContent && newText != origText {
+			m.previousClipboard = origText
+			if m.onRevertStatusChange != nil {
+				m.onRevertStatusChange(true) // Enable revert option
+			}
+		} else if !isNewContent && m.previousClipboard != "" {
+			// If processing already transformed text, keep the existing previousClipboard and revert status active
+			if m.onRevertStatusChange != nil {
+				m.onRevertStatusChange(true)
+			}
+		} else {
+			// Enable revert only if a change was made and nothing was stored previously
+			if newText != origText && m.previousClipboard == "" {
+				m.previousClipboard = origText
+				if m.onRevertStatusChange != nil {
+					m.onRevertStatusChange(true)
+				}
+			} else if newText == origText && m.previousClipboard == "" { // No change and nothing stored
+				if m.onRevertStatusChange != nil {
+					m.onRevertStatusChange(false)
+				}
+			} // Otherwise, leave revert status as is
 		}
-	}
-
-	// Handle temporary clipboard storage if needed
-	if m.config.TemporaryClipboard && (isNewContent || m.previousClipboard == "") {
-		m.previousClipboard = origText
-		// Enable revert option
+	} else if m.previousClipboard != "" {
+		// If temporary clipboard got disabled externally (config reload), clear stored original and update UI
+		m.previousClipboard = ""
 		if m.onRevertStatusChange != nil {
-			m.onRevertStatusChange(true)
+			m.onRevertStatusChange(false)
 		}
 	}
 
-	// Update the clipboard with the replaced text
-	if err := clipboard.WriteAll(newText); err != nil {
-		log.Printf("Failed to write to clipboard: %v", err)
-		return "" // Early return needs to return a string
+	// --- Store state for diff *if* changes were actually made ---
+	changedForDiff = (origText != newText) // The most reliable check
+	if changedForDiff {
+		m.lastOriginalForDiff = origText
+		m.lastModifiedForDiff = newText
+		log.Printf("Stored original and modified text for diff view.")
+	} else {
+		// If no changes, clear the diff state
+		m.lastOriginalForDiff = ""
+		m.lastModifiedForDiff = ""
+		log.Printf("No changes made, cleared diff state.")
 	}
 
-	// Track what was just placed in the clipboard
-	m.lastTransformedClipboard = newText
+	// --- Update the clipboard with the replaced text only if it changed ---
+	if changedForDiff {
+		if err := clipboard.WriteAll(newText); err != nil {
+			log.Printf("Failed to write to clipboard: %v", err)
+			m.lastOriginalForDiff = "" // Clear diff state on error
+			m.lastModifiedForDiff = ""
+			return "", false // Return false for changedForDiff
+		}
+		// Track what was just placed in the clipboard
+		m.lastTransformedClipboard = newText
+	} else {
+		// If no change, ensure lastTransformed is same as original read
+		m.lastTransformedClipboard = origText
+	}
 
-	// Generate notification message if replacements were made
-	var message string
-	if totalReplacements > 0 {
+	// --- Generate notification message if replacements were made and text changed ---
+	var baseMessage string // Use a separate var for the core message
+	if totalReplacements > 0 && changedForDiff { // Ensure changes happened and were counted
 		directionIndicator := ""
 		if isReverse {
 			directionIndicator = " (reverse)"
 		}
 
-		log.Printf("Clipboard updated with %d total replacements%s from profiles: %s",
+		log.Printf("Clipboard updated with %d total replacement(s)%s from profiles: %s",
 			totalReplacements, directionIndicator, strings.Join(activeProfiles, ", "))
 
+		profileNames := strings.Join(activeProfiles, ", ")
+		profilePart := ""
 		if len(activeProfiles) > 1 {
-			message = fmt.Sprintf("%d replacements%s applied from profiles: %s",
-				totalReplacements, directionIndicator, strings.Join(activeProfiles, ", "))
-		} else {
-			message = fmt.Sprintf("%d replacements%s applied from profile: %s",
-				totalReplacements, directionIndicator, activeProfiles[0])
+			profilePart = fmt.Sprintf(" from profiles: %s", profileNames)
+		} else if len(activeProfiles) == 1 {
+			profilePart = fmt.Sprintf(" from profile: %s", profileNames)
 		}
 
-		if m.config.TemporaryClipboard {
+		baseMessage = fmt.Sprintf("%d replacement(s)%s applied%s.",
+			totalReplacements, directionIndicator, profilePart)
+
+		// Use m.config for flags
+		if m.config.TemporaryClipboard && m.previousClipboard != "" { // Check if something is stored
 			if m.config.AutomaticReversion {
-				message += ". Clipboard will be automatically reverted after paste."
+				baseMessage += " Clipboard will be automatically reverted after paste."
 			} else if m.config.RevertHotkey != "" {
-				message += fmt.Sprintf(". Press %s to revert or use system tray menu.", m.config.RevertHotkey)
+				baseMessage += fmt.Sprintf(" Press %s or use Systray Menu to revert.", m.config.RevertHotkey)
 			} else {
-				message += ". Original text stored for manual reversion."
+				baseMessage += " Use Systray Menu to revert."
 			}
 		}
-	} else {
-		log.Println("No regex replacements applied; will paste original text.")
-		// Don't return early - we still want to paste the original text
+		// Append note about viewing changes
+		message = baseMessage + " Use Systray Menu to view details."
+
+	} else if changedForDiff && totalReplacements == 0 {
+         log.Println("Clipboard text changed, but no specific replacements were counted (e.g., empty match).")
+         message = "Clipboard updated. Use Systray Menu to view details." // Generic message if changed but count is 0
+    } else {
+		log.Println("No regex replacements applied or text did not change.")
+		message = "" // No message if no replacements/changes
 	}
 
-	// Short delay to allow clipboard update
-	// time.Sleep(20 * time.Millisecond)
-	// m.pasteClipboardContent()
-
-	// Handle automatic reversion after paste if enabled
-	// if m.config.TemporaryClipboard && m.config.AutomaticReversion && m.previousClipboard != "" {
-	// 	// Give a small delay after paste to ensure the paste operation completes
-	// 	time.Sleep(50 * time.Millisecond)
-
-	// 	// Restore original clipboard
-	// 	if err := clipboard.WriteAll(m.previousClipboard); err != nil {
-	// 		log.Printf("Failed to automatically restore original clipboard: %v", err)
-	// 	} else {
-	// 		log.Println("Original clipboard content automatically restored after paste.")
-	// 		// Update revert status
-	// 		m.previousClipboard = ""
-	// 		if m.onRevertStatusChange != nil {
-	// 			m.onRevertStatusChange(false)
-	// 		}
-	// 	}
-	// }
-
-	// Always start paste goroutine regardless of replacements
+	// --- Start paste goroutine regardless of replacements ---
 	go func() {
 		// Important: Recover from any panics so we don't crash
 		defer func() {
@@ -172,279 +273,467 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) string {
 				log.Printf("RECOVERED FROM PANIC IN PASTE GOROUTINE: %v", r)
 			}
 		}()
-		
+
 		log.Println("Starting paste operation in separate goroutine...")
-		
-		// Important: Add a delay before pasting to give the UI time to update
+
+		// Delay before pasting to allow clipboard system and target app to be ready
 		time.Sleep(400 * time.Millisecond)
-		
-		// Try to paste
-		m.pasteClipboardContent()
-		
-		// Handle automatic reversion after paste if enabled
+
+		// Try to paste the content *currently* in the clipboard (which is newText)
+		simulatePlatformPaste() // Call the platform-specific paste function
+
+		// Handle automatic reversion *after* paste attempt if enabled
+		// Check config flags *again* inside goroutine using m.config
 		if m.config.TemporaryClipboard && m.config.AutomaticReversion && m.previousClipboard != "" {
-			// Give a small delay after paste to ensure the paste operation completes
+			// Delay *after* paste simulation
 			time.Sleep(300 * time.Millisecond)
-			
+
 			// Restore original clipboard
 			if err := clipboard.WriteAll(m.previousClipboard); err != nil {
 				log.Printf("Failed to automatically restore original clipboard: %v", err)
 			} else {
 				log.Println("Original clipboard content automatically restored after paste.")
-				// Update revert status
+				currentStored := m.previousClipboard // Capture before clearing
+				// Clear the stored original and update UI status
 				m.previousClipboard = ""
+				m.lastTransformedClipboard = currentStored // Set last transformed to what was restored
+				// Clear diff state too
+				m.lastOriginalForDiff = ""
+				m.lastModifiedForDiff = ""
+
 				if m.onRevertStatusChange != nil {
-					m.onRevertStatusChange(false)
+					// Run callback in a separate goroutine to avoid blocking paste thread if UI is slow
+					go m.onRevertStatusChange(false)
 				}
+				// Also update diff status in UI? Needs coordination. For now, it updates on next hotkey press.
 			}
 		}
-		
-		log.Println("Paste goroutine completed successfully.")
+
+		log.Println("Paste goroutine potentially completed.")
 	}()
-	
-	// Return message for notification
-	return message
+
+	// Return message and diff status
+	return message, changedForDiff
 }
 
 // RestoreOriginalClipboard reverts to the previous clipboard content
 func (m *Manager) RestoreOriginalClipboard() bool {
 	if m.previousClipboard != "" {
+		// Read current clipboard content (optional, for logging comparison)
+		_, errRead := clipboard.ReadAll()
+		if errRead != nil {
+			log.Printf("Warning: Failed to read current clipboard before reverting: %v", errRead)
+			// Decide whether to proceed anyway or return false. Let's proceed.
+		}
+
+		// Write the stored original content back to the clipboard
 		if err := clipboard.WriteAll(m.previousClipboard); err != nil {
 			log.Printf("Failed to restore original clipboard: %v", err)
 			return false
 		}
-		
+
 		log.Println("Original clipboard content restored.")
 
-		// Clear the previous clipboard
+		// Clear the stored original clipboard content
+		originalRestored := m.previousClipboard
 		m.previousClipboard = ""
-		
-		// Update UI status
+
+		// Update the 'last transformed' state to reflect the restored content
+		m.lastTransformedClipboard = originalRestored
+
+		// Also clear the diff state as it's no longer relevant to the restored content
+		m.lastOriginalForDiff = ""
+		m.lastModifiedForDiff = ""
+
+		// Update UI status for revert option
 		if m.onRevertStatusChange != nil {
 			m.onRevertStatusChange(false)
 		}
-		
+		// Update UI status for diff option? Coordinated elsewhere for now.
+
 		return true
 	}
+	log.Println("No original clipboard content available to restore.")
 	return false
 }
 
-// applyForwardReplacement handles normal regex-based replacements
-func (m *Manager) applyForwardReplacement(text string, rep config.Replacement) (string, int) {
-	// Compile the regex pattern
-	re, err := regexp.Compile(rep.Regex)
+// applyForwardReplacement handles normal regex-based replacements, now resolving secrets.
+// Returns: replaced string, count, error (if secret resolution failed or regex invalid)
+func (m *Manager) applyForwardReplacement(text string, rep config.Replacement) (string, int, error) {
+	// Resolve secrets first using the manager's map
+	resolvedRegex, errRegex := resolvePlaceholders(rep.Regex, m.resolvedSecrets, true)
+	resolvedReplaceWith, errReplace := resolvePlaceholders(rep.ReplaceWith, m.resolvedSecrets, false)
+
+	// If either resolution failed, return error immediately
+	if errRegex != nil {
+		return text, 0, fmt.Errorf("failed to resolve placeholders in regex '%s': %w", rep.Regex, errRegex)
+	}
+	if errReplace != nil {
+		return text, 0, fmt.Errorf("failed to resolve placeholders in replace_with '%s': %w", rep.ReplaceWith, errReplace)
+	}
+
+	// Compile the resolved regex pattern
+	re, err := regexp.Compile(resolvedRegex)
 	if err != nil {
-		log.Printf("Invalid regex '%s': %v", rep.Regex, err)
-		return text, 0
+		// Log the specific error
+		log.Printf("Invalid resolved regex '%s' (from original: '%s'): %v", resolvedRegex, rep.Regex, err)
+		// Return an error indicating compilation failure
+		return text, 0, fmt.Errorf("invalid compiled regex from '%s': %w", rep.Regex, err)
+	}
+
+	// Find all matches to count accurately *before* replacement
+	matchesIndexes := re.FindAllStringIndex(text, -1)
+	matchCount := 0
+	if matchesIndexes != nil {
+		matchCount = len(matchesIndexes)
+	}
+
+	// If no matches, return original text immediately
+	if matchCount == 0 {
+		return text, 0, nil // No matches, no error
+	}
+
+	// Apply replacement with or without case preservation using resolvedReplaceWith
+	var result string
+	if rep.PreserveCase {
+		// Use ReplaceAllStringFunc for case preservation
+		result = re.ReplaceAllStringFunc(text, func(match string) string {
+			// Use the resolved replacement string for case preservation
+			return m.preserveCase(match, resolvedReplaceWith)
+		})
+	} else {
+		// Use standard ReplaceAllString
+		result = re.ReplaceAllString(text, resolvedReplaceWith)
+	}
+
+	// Only return count > 0 if the text actually changed.
+	if text == result {
+		return text, 0, nil // Text didn't change, no error
+	}
+
+	// Return the modified text and the count of matches found
+	return result, matchCount, nil
+}
+
+// applyReverseReplacement handles reverse replacements, now resolving secrets.
+// Returns: replaced string, count, error (if secret resolution failed, source invalid, or regex invalid)
+func (m *Manager) applyReverseReplacement(text string, rep config.Replacement) (string, int, error) {
+	// --- Resolve Target Word (from replace_with) ---
+	resolvedTargetWord, errTarget := resolvePlaceholders(rep.ReplaceWith, m.resolvedSecrets, false)
+	if errTarget != nil {
+		return text, 0, fmt.Errorf("failed to resolve placeholders in replace_with for reverse target '%s': %w", rep.ReplaceWith, errTarget)
+	}
+	if resolvedTargetWord == "" {
+		log.Printf("Warning: Resolved 'replace_with' is empty for reverse replacement in rule with original regex '%s'. Cannot reverse.", rep.Regex)
+		return text, 0, nil // Cannot reverse if target is empty, but not a critical error.
+	}
+
+	// --- Resolve Source Word (from reverse_with or derived from regex) ---
+	var resolvedSourceWord string
+	var errSource error
+	if rep.ReverseWith != "" {
+		// Resolve placeholders in the specified reverse replacement
+		resolvedSourceWord, errSource = resolvePlaceholders(rep.ReverseWith, m.resolvedSecrets, false) // Source word isn't regex usually
+	} else {
+		// Fall back to extracting from the original forward regex
+		rawSourceWord := m.extractFirstAlternative(rep.Regex) // Extract before resolving
+		if rawSourceWord == "" {
+			log.Printf("Warning: Could not determine raw source word for reverse replacement from regex '%s'. Trying cleaned regex.", rep.Regex)
+			rawSourceWord = strings.TrimPrefix(rep.Regex, "(?i)")
+			rawSourceWord = strings.Trim(rawSourceWord, "()")
+		}
+		// Now resolve placeholders in the derived raw source word
+		resolvedSourceWord, errSource = resolvePlaceholders(rawSourceWord, m.resolvedSecrets, false)
+
+		// Check if source determination failed or results in empty/same word after resolution
+		if resolvedSourceWord == "" {
+			log.Printf("Error: Unable to determine a non-empty source word for reverse replacement in rule '%s' after resolving placeholders.", rep.Regex)
+			return text, 0, fmt.Errorf("unable to determine non-empty source word for reverse replacement in rule '%s'", rep.Regex)
+		}
+        // Allow source and target to be the same if preserve_case is involved? Maybe not safe.
+        // Let's prevent source == target unless explicitly allowed somehow.
+        // if resolvedSourceWord == resolvedTargetWord {
+		//	log.Printf("Error: Resolved source word ('%s') is the same as resolved target word ('%s') for reverse replacement in rule '%s'. Cannot reverse.", resolvedSourceWord, resolvedTargetWord, rep.Regex)
+		//	return text, 0, fmt.Errorf("resolved source and target are identical for reverse replacement in rule '%s'", rep.Regex)
+		//}
+	}
+	// Check error from resolving source word placeholder itself
+	if errSource != nil {
+		// Error occurred during placeholder resolution for the source word
+		sourceOrigin := rep.ReverseWith
+		if sourceOrigin == "" { sourceOrigin = fmt.Sprintf("derived from regex '%s'", rep.Regex)}
+		return text, 0, fmt.Errorf("failed to resolve placeholders in source word ('%s') for reverse: %w", sourceOrigin, errSource)
+	}
+
+
+	// --- Compile finder regex for the resolved target word ---
+	var findRe *regexp.Regexp
+	var err error
+	searchPattern := regexp.QuoteMeta(resolvedTargetWord) // Quote meta chars in the resolved target
+
+	if rep.PreserveCase {
+		findRe, err = regexp.Compile(`(?i)` + searchPattern)
+	} else {
+		findRe, err = regexp.Compile(searchPattern)
+	}
+	if err != nil {
+		log.Printf("Error compiling regex for reverse search of resolved target '%s' (from '%s'): %v", resolvedTargetWord, rep.ReplaceWith, err)
+		// Return compile error
+		return text, 0, fmt.Errorf("failed to compile reverse search regex for target '%s': %w", rep.ReplaceWith, err)
 	}
 
 	// Count matches before replacement
-	matches := re.FindAllStringIndex(text, -1)
+	matchesIndexes := findRe.FindAllStringIndex(text, -1)
 	matchCount := 0
-	if matches != nil {
-		matchCount = len(matches)
+	if matchesIndexes != nil {
+		matchCount = len(matchesIndexes)
+	}
+	if matchCount == 0 {
+		return text, 0, nil // No matches found, no error
 	}
 
-	// Apply replacement with or without case preservation
-	var result string
-	if rep.PreserveCase {
-		result = re.ReplaceAllStringFunc(text, func(match string) string {
-			return m.preserveCase(match, rep.ReplaceWith)
-		})
-	} else {
-		result = re.ReplaceAllString(text, rep.ReplaceWith)
+	// Perform replacement using ReplaceAllStringFunc to handle case preservation using resolvedSourceWord
+	replacedText := findRe.ReplaceAllStringFunc(text, func(match string) string {
+		if rep.PreserveCase {
+			// Apply the case pattern of the matched text (targetWord instance) to the resolvedSourceWord
+			return m.preserveCase(match, resolvedSourceWord)
+		}
+		// If not preserving case, just return the resolvedSourceWord directly
+		return resolvedSourceWord
+	})
+
+	// Only return count > 0 if the text actually changed.
+	if text == replacedText {
+		return text, 0, nil // Text didn't change, no error
 	}
 
-	return result, matchCount
+	return replacedText, matchCount, nil
 }
 
-// applyReverseReplacement handles reverse replacements
-func (m *Manager) applyReverseReplacement(text string, rep config.Replacement) (string, int) {
-	// For reverse replacement, we'll work with individual words/tokens
-	origWord := rep.ReplaceWith // What we're looking for (e.g., "GithubUser")
+// --- Helper methods below (no changes needed) ---
 
-	// What we'll replace it with - check for override first
-	var replaceWord string
-	if rep.ReverseWith != "" {
-		// Use the specified reverse replacement if provided
-		replaceWord = rep.ReverseWith
-	} else {
-		// Fall back to extracting the first alternative from the regex
-		replaceWord = m.extractFirstAlternative(rep.Regex)
-	}
-
-	// Split the text into tokens (words, whitespace, punctuation)
-	re := regexp.MustCompile(`(\w+|[^\w\s]+|\s+)`)
-	tokens := re.FindAllString(text, -1)
-
-	// Track replacements
-	replacementCount := 0
-
-	// Go through each token and replace if it matches our target
-	for i, token := range tokens {
-		if !m.isWord(token) {
-			// Skip non-word tokens
-			continue
-		}
-
-		// Check if this token matches our replacement word
-		if (rep.PreserveCase && strings.EqualFold(token, origWord)) ||
-			(!rep.PreserveCase && token == origWord) {
-			// It's a match - replace it
-			if rep.PreserveCase {
-				tokens[i] = m.preserveCase(token, replaceWord)
-			} else {
-				tokens[i] = replaceWord
-			}
-			replacementCount++
-		}
-	}
-
-	// Only rebuild the text if we made replacements
-	if replacementCount > 0 {
-		return strings.Join(tokens, ""), replacementCount
-	}
-
-	return text, 0
-}
-
-// pasteClipboardContent simulates a paste action
-func (m *Manager) pasteClipboardContent() {
-	switch runtime.GOOS {
-	case "windows":
-		keyboard := syscall.NewLazyDLL("user32.dll")
-		keybd_event := keyboard.NewProc("keybd_event")
-		// VK_CONTROL = 0x11, VK_V = 0x56
-		keybd_event.Call(0x11, 0, 0, 0) // Press Ctrl
-		keybd_event.Call(0x56, 0, 0, 0) // Press V
-		keybd_event.Call(0x56, 0, 2, 0) // Release V
-		keybd_event.Call(0x11, 0, 2, 0) // Release Ctrl
-	case "linux":
-		if err := exec.Command("xdotool", "key", "ctrl+v").Run(); err != nil {
-			log.Printf("Failed to simulate paste on Linux: %v", err)
-		}
-	default:
-		log.Println("Automatic paste not supported on this platform.")
-	}
-
-	// Handle automatic reversion after paste if enabled
-	if m.config.TemporaryClipboard && m.config.AutomaticReversion && m.previousClipboard != "" {
-		// Give a small delay after paste to ensure the paste operation completes
-		time.Sleep(50 * time.Millisecond)
-
-		// Restore original clipboard
-		if err := clipboard.WriteAll(m.previousClipboard); err != nil {
-			log.Printf("Failed to automatically restore original clipboard: %v", err)
-		} else {
-			log.Println("Original clipboard content automatically restored after paste.")
-			// Update revert status
-			m.previousClipboard = ""
-			if m.onRevertStatusChange != nil {
-				m.onRevertStatusChange(false)
-			}
-		}
-	}
-}
-
-// Helper methods below
-
-// isWord checks if a token is a word (alphanumeric)
+// isWord checks if a token is primarily a word (alphanumeric + underscore)
 func (m *Manager) isWord(token string) bool {
+	if len(token) == 0 {
+		return false
+	}
 	for _, r := range token {
+		// Allow letters, numbers, and underscore for typical variable/word definition
 		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_' {
 			return false
 		}
 	}
-	return len(token) > 0
+	return true
 }
 
-// extractFirstAlternative attempts to extract the first pattern from an alternation
+// extractFirstAlternative attempts to extract the first pattern from an alternation `(a|b|c)` in a regex.
 func (m *Manager) extractFirstAlternative(regex string) string {
-	// Remove case-insensitive flag
-	regex = strings.TrimPrefix(regex, "(?i)")
-
-	// Try to extract first alternative from pattern with alternation
-	re := regexp.MustCompile(`\(([^|)]+)`)
-	matches := re.FindStringSubmatch(regex)
-	if len(matches) > 1 {
-		return strings.TrimSpace(matches[1])
+	// Remove common flags like (?i) at the start
+	if i := strings.Index(regex, ")"); i > 0 && strings.HasPrefix(regex, "(?") {
+		regex = regex[i+1:]
 	}
 
-	// If no alternation found, try to extract the pattern inside parentheses
-	re = regexp.MustCompile(`\(([^)]+)\)`)
-	matches = re.FindStringSubmatch(regex)
-	if len(matches) > 1 {
-		return strings.TrimSpace(matches[1])
+	// Find the first opening parenthesis that isn't escaped
+	start := -1
+	for i := 0; i < len(regex); i++ {
+		if regex[i] == '(' && (i == 0 || regex[i-1] != '\\') {
+			start = i
+			break
+		}
 	}
 
-	// As a last resort, just clean up the regex
-	regex = strings.TrimPrefix(regex, "(")
-	regex = strings.TrimSuffix(regex, ")")
-	return strings.TrimSpace(regex)
+	if start == -1 {
+		// No group found, check if it's a simple alternation without outer parens
+		if strings.Contains(regex, "|") && !strings.Contains(regex, "\\|") {
+            // Basic split, might be wrong if pipes are escaped later
+            parts := strings.SplitN(regex, "|", 2)
+            if len(parts) > 0 {
+                 return strings.TrimSpace(parts[0])
+            }
+        }
+		// Otherwise return cleaned regex as is
+		return strings.TrimSpace(regex)
+	}
+
+	// Find the matching closing parenthesis (very basic level matching, ignores nesting/escapes within)
+	end := -1
+	level := 0
+	for i := start; i < len(regex); i++ {
+		if regex[i] == '(' && (i == 0 || regex[i-1] != '\\') {
+			level++
+		} else if regex[i] == ')' && (i == 0 || regex[i-1] != '\\') {
+			level--
+			if level == 0 {
+				end = i
+				break
+			}
+		}
+	}
+
+	if end == -1 {
+		// No matching closing parenthesis found for the first opening one
+		return strings.TrimSpace(regex)
+	}
+
+	// Extract content within the first top-level parentheses
+	groupContent := regex[start+1 : end]
+
+	// Split by the alternation character '|', ignoring escaped pipes \|
+	// This requires a more careful split than strings.Split
+	var alternatives []string
+	current := ""
+	escape := false
+	parenLevel := 0 // Track nested parentheses within the group
+	for _, r := range groupContent {
+		if escape {
+			current += string(r)
+			escape = false
+		} else if r == '\\' {
+			escape = true
+			current += string(r) // Keep the escape char
+		} else if r == '(' {
+			parenLevel++
+			current += string(r)
+		} else if r == ')' {
+			parenLevel--
+			current += string(r)
+		} else if r == '|' && parenLevel == 0 { // Split only if not inside nested parens
+			alternatives = append(alternatives, current)
+			current = ""
+		} else {
+			current += string(r)
+		}
+	}
+	alternatives = append(alternatives, current) // Add the last part
+
+	if len(alternatives) > 0 {
+		// Return the first part, trimmed of whitespace
+		// Also potentially unescape characters if needed, but likely not required for simple cases
+		firstAlt := strings.TrimSpace(alternatives[0])
+        // Basic unescaping (e.g., remove \ before | or other metachars if needed)
+        // firstAlt = strings.ReplaceAll(firstAlt, "\\|", "|")
+        // ... etc.
+		return firstAlt
+	}
+
+	// If no alternatives found within the group, return the group content itself
+	return strings.TrimSpace(groupContent)
 }
 
-// preserveCase applies the case pattern from source to target
+// preserveCase applies the case pattern from source to target string.
 func (m *Manager) preserveCase(source, target string) string {
-	// If source is empty or target is empty, return target as is
-	if source == "" || target == "" {
+	// If source or target is empty, nothing to base case on, return target.
+	if len(source) == 0 || len(target) == 0 {
 		return target
 	}
 
-	// If source is all lowercase, return target as all lowercase
-	if source == strings.ToLower(source) {
-		return strings.ToLower(target)
-	}
-
-	// If source is all uppercase, return target as all uppercase
-	if source == strings.ToUpper(source) {
-		return strings.ToUpper(target)
-	}
-
-	// For PascalCase/camelCase and other mixed cases
 	sourceRunes := []rune(source)
 	targetRunes := []rune(target)
 
-	// If target has internal capitalization (like "GithubUser"), preserve it
-	// but adjust the first character to match source
-	if m.hasInternalCapitalization(target) {
-		if len(sourceRunes) > 0 && len(targetRunes) > 0 {
-			if unicode.IsUpper(sourceRunes[0]) {
-				targetRunes[0] = unicode.ToUpper(targetRunes[0])
-			} else {
-				targetRunes[0] = unicode.ToLower(targetRunes[0])
+	// 1. All Lowercase: If source is all lowercase (considering only letters).
+	isSourceLower := true
+	hasSourceLetter := false
+	for _, r := range sourceRunes {
+		if unicode.IsLetter(r) {
+			hasSourceLetter = true
+			if !unicode.IsLower(r) {
+				isSourceLower = false
+				break
 			}
 		}
-		return string(targetRunes)
+	}
+	if hasSourceLetter && isSourceLower {
+		return strings.ToLower(target)
 	}
 
-	// For Title Case (first letter uppercase, rest lowercase)
-	if len(sourceRunes) > 1 &&
-		unicode.IsUpper(sourceRunes[0]) &&
-		strings.ToLower(string(sourceRunes[1:])) == string(sourceRunes[1:]) {
-		if len(targetRunes) > 0 {
+	// 2. All Uppercase: If source is all uppercase (considering only letters).
+	isSourceUpper := true
+	hasSourceLetter = false // Reset for upper check
+	for _, r := range sourceRunes {
+		if unicode.IsLetter(r) {
+			hasSourceLetter = true
+			if !unicode.IsUpper(r) {
+				isSourceUpper = false
+				break
+			}
+		}
+	}
+	if hasSourceLetter && isSourceUpper {
+		return strings.ToUpper(target)
+	}
+
+	// 3. Title Case / First Letter Upper: Source starts upper, rest lower (letters only).
+	if len(sourceRunes) > 0 && unicode.IsUpper(sourceRunes[0]) {
+		isSourceTitle := true
+		if len(sourceRunes) > 1 {
+			subsequentAreLower := true
+			for i := 1; i < len(sourceRunes); i++ { // Check from the second rune
+                r := sourceRunes[i]
+				if unicode.IsLetter(r) && !unicode.IsLower(r) {
+					subsequentAreLower = false
+					break
+				}
+			}
+			if !subsequentAreLower {
+				isSourceTitle = false
+			}
+		}
+		// Apply Title Case to target if source matches pattern and target has letters
+		if isSourceTitle {
+			hasTargetLetter := false
+			for _, tr := range targetRunes {
+				if unicode.IsLetter(tr) {
+					hasTargetLetter = true
+					break
+				}
+			}
+
+			if hasTargetLetter {
+				res := string(unicode.ToUpper(targetRunes[0]))
+				if len(targetRunes) > 1 {
+					res += strings.ToLower(string(targetRunes[1:]))
+				}
+				return res
+			}
+		}
+	}
+
+	// 4. PascalCase/camelCase heuristic or Default: Match first letter case, keep rest of target's case.
+	// This is often the most useful default.
+	if len(targetRunes) > 0 {
+		firstSourceRune := sourceRunes[0]
+		firstTargetRune := targetRunes[0]
+
+		// Only change case if the first source character is a letter
+		if unicode.IsLetter(firstSourceRune) {
+			var newFirstTargetRune rune
+			if unicode.IsUpper(firstSourceRune) {
+				newFirstTargetRune = unicode.ToUpper(firstTargetRune)
+			} else { // IsLower
+				newFirstTargetRune = unicode.ToLower(firstTargetRune)
+			}
+
+			// Construct the result: new first letter + rest of target
 			if len(targetRunes) > 1 {
-				return string(unicode.ToUpper(targetRunes[0])) + strings.ToLower(string(targetRunes[1:]))
-			} else {
-				return string(unicode.ToUpper(targetRunes[0]))
+				return string(newFirstTargetRune) + string(targetRunes[1:])
 			}
+			return string(newFirstTargetRune)
 		}
+        // If first source char is not a letter, maybe don't change target case?
+        // Let's return target as is in this case.
+        // return target
 	}
 
-	// Default: just make first letter match source
-	if len(sourceRunes) > 0 && len(targetRunes) > 0 {
-		if unicode.IsUpper(sourceRunes[0]) {
-			targetRunes[0] = unicode.ToUpper(targetRunes[0])
-		} else {
-			targetRunes[0] = unicode.ToLower(targetRunes[0])
-		}
-	}
-
-	return string(targetRunes)
+	// Fallback: If all else fails (e.g., empty target?), return target unmodified.
+	return target
 }
 
 // hasInternalCapitalization checks if a string has uppercase letters after the first position
 func (m *Manager) hasInternalCapitalization(s string) bool {
 	runes := []rune(s)
+	if len(runes) <= 1 {
+		return false // Cannot have internal capitalization with 0 or 1 chars
+	}
 	for i := 1; i < len(runes); i++ {
 		if unicode.IsUpper(runes[i]) {
 			return true

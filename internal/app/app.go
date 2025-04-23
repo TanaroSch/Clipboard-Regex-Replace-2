@@ -1,14 +1,22 @@
+// ==== internal/app/app.go ====
 package app
 
 import (
-	"fmt"
+	"errors" // Needed for zenity error checking
+	"fmt"    // Needed for Sprintf
 	"log"
+	"os" // Needed by os.Exit in RestartApplication call chain
+	"path/filepath"
+	"regexp" // <-- Import regexp
+	"strings"
+	//"time" // <-- Import time (Needed again for profile name generation)
 
 	"github.com/TanaroSch/clipboard-regex-replace/internal/clipboard"
 	"github.com/TanaroSch/clipboard-regex-replace/internal/config"
 	"github.com/TanaroSch/clipboard-regex-replace/internal/hotkey"
 	"github.com/TanaroSch/clipboard-regex-replace/internal/resources"
 	"github.com/TanaroSch/clipboard-regex-replace/internal/ui"
+	"github.com/ncruces/zenity" // Zenity import
 )
 
 // Application represents the main application
@@ -24,35 +32,39 @@ type Application struct {
 // New creates a new application instance
 func New(cfg *config.Config, version string) *Application {
 	app := &Application{
-		config:  cfg,
+		config:  cfg, // Config now contains resolvedSecrets map after Load
 		version: version,
 	}
-	
-	// Load embedded icon
+
 	var err error
 	app.iconData, err = resources.GetIcon()
 	if err != nil {
 		log.Printf("Warning: Failed to load embedded icon: %v", err)
 	}
 
-	// Initialize global notifications
-	ui.InitGlobalNotifications(cfg.UseNotifications, "Clipboard Regex Replace", app.iconData)
+	ui.InitGlobalNotifications(cfg.UseNotifications, config.DefaultKeyringService, app.iconData) // Use AppName for consistency
 
-	// Create clipboard manager
-	app.clipboardManager = clipboard.NewManager(cfg, app.onRevertStatusChange)
+	// Pass config reference and resolved secrets map to clipboard manager
+	app.clipboardManager = clipboard.NewManager(cfg, cfg.GetResolvedSecrets(), app.onRevertStatusChange)
 
-	// Create hotkey manager
+	// Pass config reference to hotkey manager
 	app.hotkeyManager = hotkey.NewManager(cfg, app.onHotkeyTriggered, app.onRevertHotkey)
 
-	// Create systray manager
+	// Add secret management and simple rule callbacks to systray manager
 	app.systrayManager = ui.NewSystrayManager(
 		cfg,
 		version,
 		app.iconData,
-		app.onReloadConfig,
+		app.onReloadConfig, // Reloads config AND secrets
 		app.onRestartApplication,
 		app.onQuit,
 		app.onRevertMenuItem,
+		app.onOpenConfigFile,
+		app.onViewLastDiffTriggered,
+		app.onAddSecret,
+		app.onListSecrets,
+		app.onRemoveSecret,
+		app.onAddSimpleRule, // <-- Pass the new callback
 	)
 
 	return app
@@ -60,29 +72,50 @@ func New(cfg *config.Config, version string) *Application {
 
 // Run starts the application
 func (a *Application) Run() {
-	// Register hotkeys
 	if err := a.hotkeyManager.RegisterAll(); err != nil {
 		log.Printf("Warning: Failed to register some hotkeys: %v", err)
-		ui.ShowNotification("Hotkey Registration Issue", 
+		ui.ShowNotification("Hotkey Registration Issue",
 			fmt.Sprintf("Some hotkeys could not be registered: %v", err))
 	}
-
-	// Start systray
+	// Start the systray manager (blocking call)
 	a.systrayManager.Run()
 }
 
 // onHotkeyTriggered is called when a hotkey is pressed
 func (a *Application) onHotkeyTriggered(hotkeyStr string, isReverse bool) {
-	message := a.clipboardManager.ProcessClipboard(hotkeyStr, isReverse)
+	// clipboardManager uses its internal config reference and resolved secrets
+	message, changedForDiff := a.clipboardManager.ProcessClipboard(hotkeyStr, isReverse)
 	if message != "" {
 		ui.ShowNotification("Clipboard Updated", message)
 	}
+	if a.systrayManager != nil {
+		a.systrayManager.UpdateViewLastDiffStatus(changedForDiff)
+	}
+}
+
+// onViewLastDiffTriggered is called when the "View Last Change Details" menu item is clicked
+func (a *Application) onViewLastDiffTriggered() {
+	original, modified, ok := a.clipboardManager.GetLastDiff()
+	if !ok {
+		log.Println("View Last Change Details clicked, but no diff data available.")
+		ui.ShowNotification("View Changes", "No changes recorded from the last operation.")
+		if a.systrayManager != nil {
+			a.systrayManager.UpdateViewLastDiffStatus(false)
+		}
+		return
+	}
+	log.Println("View Last Change Details clicked, showing diff viewer.")
+	ui.ShowDiffViewer(original, modified)
 }
 
 // onRevertHotkey is called when the revert hotkey is pressed
 func (a *Application) onRevertHotkey() {
 	if a.clipboardManager.RestoreOriginalClipboard() {
 		ui.ShowNotification("Clipboard Reverted", "Original clipboard content has been restored.")
+		if a.systrayManager != nil {
+			// Also clear the diff state in the UI when reverting
+			a.systrayManager.UpdateViewLastDiffStatus(false)
+		}
 	}
 }
 
@@ -91,77 +124,128 @@ func (a *Application) onRevertMenuItem() {
 	a.onRevertHotkey()
 }
 
-// onRevertStatusChange is called when revert status changes
+// onRevertStatusChange is called when revert status changes (from clipboard manager)
 func (a *Application) onRevertStatusChange(canRevert bool) {
-	a.systrayManager.UpdateRevertStatus(canRevert)
+	if a.systrayManager != nil {
+		a.systrayManager.UpdateRevertStatus(canRevert)
+	}
 }
 
-// onReloadConfig is called when the reload config menu item is clicked
+// onReloadConfig is called when the reload config menu item is clicked or triggered internally
 func (a *Application) onReloadConfig() {
-	log.Println("Reloading configuration...")
+	log.Println("Reloading configuration and secrets...")
 
-	// Store the original number of profiles and their names for comparison
-	originalProfileCount := len(a.config.Profiles)
-	originalProfileNames := make(map[string]bool)
-	for _, profile := range a.config.Profiles {
-		originalProfileNames[profile.Name] = true
-	}
-
-	// Store current enabled status of profiles to preserve user's runtime choices
+	// --- Preserve state across reload ---
 	enabledStatus := make(map[string]bool)
-	for _, profile := range a.config.Profiles {
-		enabledStatus[profile.Name] = profile.Enabled
+	originalProfileCount := 0
+	if a.config != nil && a.config.Profiles != nil {
+		originalProfileCount = len(a.config.Profiles)
+		for _, profile := range a.config.Profiles {
+			enabledStatus[profile.Name] = profile.Enabled
+		}
+	} else {
+		log.Println("Warning: Attempting to reload config, but current config is nil.")
 	}
 
-	// Load the updated configuration
-	newConfig, err := config.Load(a.config.GetConfigPath())
-	if err != nil {
-		log.Printf("Error reloading configuration: %v", err)
-		ui.ShowNotification("Configuration Error",
-			"Failed to reload configuration. Check logs for details.")
-		return
+	configPath := ""
+	if a.config != nil {
+		configPath = a.config.GetConfigPath()
 	}
-
-	// Update the application's config reference
-	a.config = newConfig
-
-	// Restore enabled status for profiles that still exist
-	// This preserves the user's runtime choices even after a config reload
-	for i, profile := range a.config.Profiles {
-		if enabled, exists := enabledStatus[profile.Name]; exists {
-			a.config.Profiles[i].Enabled = enabled
+	if configPath == "" {
+		configPath = "config.json"
+		log.Printf("Current config path is empty, attempting reload from default '%s'.", configPath)
+		if _, errStat := os.Stat(configPath); os.IsNotExist(errStat) {
+			log.Printf("Cannot reload config: Default config file '%s' does not exist.", configPath)
+			ui.ShowNotification("Configuration Error", fmt.Sprintf("Config file '%s' not found.", configPath))
+			return
 		}
 	}
 
-	// Check if profile structure has changed
-	profileStructureChanged := originalProfileCount != len(a.config.Profiles)
+	newConfig, err := config.Load(configPath)
+	if err != nil {
+		log.Printf("Error reloading configuration from '%s': %v", configPath, err)
+		ui.ShowNotification("Configuration Error",
+			fmt.Sprintf("Failed to reload configuration. Check %s and keychain access.", configPath))
+		return
+	}
 
-	if !profileStructureChanged {
-		// Check if any profile names have changed
-		for _, profile := range a.config.Profiles {
-			if !originalProfileNames[profile.Name] {
-				profileStructureChanged = true
-				break
+	// --- Apply reloaded config and state ---
+	a.config = newConfig
+
+	// Restore enabled status for profiles that still exist by name
+	if a.config.Profiles != nil {
+		for i := range a.config.Profiles { // Iterate over the NEW config profiles
+			profileName := a.config.Profiles[i].Name
+			if enabled, exists := enabledStatus[profileName]; exists {
+				a.config.Profiles[i].Enabled = enabled
+				log.Printf("Restored enabled status (%t) for profile '%s'", enabled, profileName)
+			} else {
+				log.Printf("Profile '%s' is new or renamed, keeping its default enabled status (%t)", profileName, a.config.Profiles[i].Enabled)
 			}
 		}
 	}
 
-	log.Println("Configuration reloaded successfully.")
+	// Detect significant profile structure changes (additions/removals)
+	profileStructureChanged := originalProfileCount != len(a.config.Profiles)
+	if !profileStructureChanged && originalProfileCount > 0 && a.config.Profiles != nil {
+		newProfileNames := make(map[string]bool)
+		for _, profile := range a.config.Profiles {
+			newProfileNames[profile.Name] = true
+		}
+		// Check if any old profiles are missing in the new set
+		for name := range enabledStatus {
+			if !newProfileNames[name] {
+				profileStructureChanged = true
+				break
+			}
+		}
+		// Check if any new profiles were added
+		if !profileStructureChanged {
+			for name := range newProfileNames {
+				if _, exists := enabledStatus[name]; !exists {
+					profileStructureChanged = true
+					break
+				}
+			}
+		}
+	}
 
-	// Re-register hotkeys
-	a.hotkeyManager.RegisterAll()
+	log.Println("Configuration and secrets reloaded successfully.")
 
-	if profileStructureChanged {
-		// If profile structure changed, we need to restart to rebuild the menu
-		ui.ShowNotification("Configuration Reloaded",
-			"Profile structure has changed. Restarting application to refresh menu.")
-
-		// Wait a moment for notification to show
-		a.onRestartApplication()
+	// Re-register hotkeys based on the new config
+	a.hotkeyManager = hotkey.NewManager(a.config, a.onHotkeyTriggered, a.onRevertHotkey)
+	if err := a.hotkeyManager.RegisterAll(); err != nil {
+		log.Printf("Warning: Failed to register some hotkeys after reload: %v", err)
+		ui.ShowNotification("Hotkey Registration Issue",
+			fmt.Sprintf("Some hotkeys could not be registered after reload: %v", err))
 	} else {
-		// For simple config changes, just update in memory
-		ui.ShowNotification("Configuration Reloaded",
-			"Configuration updated successfully. Hotkeys have been refreshed.")
+		log.Println("Hotkeys re-registered successfully after config reload.")
+	}
+
+	// Update clipboard manager with new secrets and config reference
+	if a.clipboardManager != nil {
+		a.clipboardManager.UpdateResolvedSecrets(a.config.GetResolvedSecrets())
+		// Update config reference within clipboard manager (assuming it has one)
+		// a.clipboardManager.UpdateConfig(a.config) // Example if such method exists
+	} else {
+		// Should not happen normally, but handle defensively
+		a.clipboardManager = clipboard.NewManager(a.config, a.config.GetResolvedSecrets(), a.onRevertStatusChange)
+	}
+
+	// Update systray manager with the new config reference
+	if a.systrayManager != nil {
+		a.systrayManager.UpdateConfig(a.config) // Update systray internal config ref
+		if profileStructureChanged {
+			log.Println("Profile structure changed significantly. Restarting application is recommended for full menu update.")
+			ui.ShowNotification("Configuration Reloaded",
+				"Profile structure changed. Please use 'Restart Application' via menu to fully refresh UI.")
+		} else {
+			ui.ShowNotification("Configuration Reloaded",
+				"Configuration and secrets updated successfully. Hotkeys have been refreshed.")
+		}
+	} else {
+		// Should not happen if app initialization is correct
+		ui.ShowNotification("Configuration Reloaded", "Configuration and secrets updated successfully.")
 	}
 }
 
@@ -172,6 +256,482 @@ func (a *Application) onRestartApplication() {
 
 // onQuit is called when the quit menu item is clicked
 func (a *Application) onQuit() {
-	// Unregister all hotkeys
-	a.hotkeyManager.UnregisterAll()
+	log.Println("Quit requested. Unregistering hotkeys.")
+	if a.hotkeyManager != nil {
+		a.hotkeyManager.UnregisterAll()
+	}
 }
+
+// onOpenConfigFile is called when the open config menu item is clicked
+func (a *Application) onOpenConfigFile() {
+	configPath := ""
+	if a.config != nil {
+		configPath = a.config.GetConfigPath()
+	}
+	if configPath == "" {
+		configPath = "config.json"
+		log.Printf("Config path not found in current config, attempting to open default: %s", configPath)
+	}
+
+	log.Printf("Request to open config file: %s", configPath)
+
+	absPath, err := filepath.Abs(configPath)
+	if err != nil {
+		log.Printf("Warning: Failed to get absolute path for '%s': %v. Proceeding with original path.", configPath, err)
+		absPath = configPath
+	} else {
+		log.Printf("Absolute config path resolved to: %s", absPath)
+	}
+
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		log.Printf("Error: Config file does not exist at path: %s", absPath)
+		ui.ShowNotification("Error Opening File", fmt.Sprintf("Config file not found: %s", absPath))
+		return
+	} else if err != nil {
+		log.Printf("Error checking config file status at path '%s': %v", absPath, err)
+		ui.ShowNotification("Error Opening File", fmt.Sprintf("Error checking config file '%s': %v", absPath, err))
+		return
+	} else {
+		log.Printf("Config file exists at: %s", absPath)
+	}
+
+	log.Printf("Attempting to open config file using ui.OpenFileInDefaultApp with path: %s", absPath)
+	err = ui.OpenFileInDefaultApp(absPath)
+	if err != nil {
+		log.Printf("Final error after trying open methods for config file '%s': %v", absPath, err)
+		ui.ShowNotification("Error Opening File", fmt.Sprintf("Could not open config file '%s': %v", absPath, err))
+	}
+}
+
+// --- Secret Management Handlers ---
+
+// onAddSecret is called when the Add/Update Secret menu item is clicked
+func (a *Application) onAddSecret() {
+	log.Println("Add/Update Secret menu item clicked.")
+	appName := config.DefaultKeyringService
+
+	// === Step 1: Get Logical Name ===
+	name, err := zenity.Entry("Step 1: Enter Logical Name\n(e.g., my_api_key, no spaces/special chars)",
+		zenity.Title(appName+" - Add/Update Secret"),
+	)
+	if err != nil {
+		if errors.Is(err, zenity.ErrCanceled) {
+			log.Println("Add/Update Secret canceled by user (name entry).")
+			ui.ShowNotification("Operation Canceled", "Add/Update Secret canceled.")
+		} else {
+			log.Printf("Error getting logical name via zenity: %v", err)
+			ui.ShowNotification("Input Error", "Failed to get logical name input.")
+		}
+		return
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || strings.ContainsAny(name, " {}[]()<>|=+*?^$\\./") {
+		log.Printf("Invalid logical name entered: '%s'", name)
+		ui.ShowNotification("Invalid Input", "Invalid logical name (empty or contains spaces/special chars). Aborted.")
+		return
+	}
+
+	// === Step 2: Get Secret Value ===
+	_, value, err := zenity.Password(
+		zenity.Title(appName + " - Step 2: Enter Secret Value for '"+name+"'"),
+		// No Username option needed here
+	)
+	if err != nil {
+		if errors.Is(err, zenity.ErrCanceled) {
+			log.Printf("Add/Update Secret canceled by user (value entry for '%s').", name)
+			ui.ShowNotification("Operation Canceled", "Add/Update Secret canceled.")
+		} else {
+			log.Printf("Error getting secret value via zenity for '%s': %v", name, err)
+			ui.ShowNotification("Input Error", "Failed to get secret value input.")
+		}
+		return
+	}
+	if value == "" {
+		log.Printf("Add/Update Secret aborted: Empty secret value provided or dialog canceled for '%s'.", name)
+		ui.ShowNotification("Add Secret Aborted", "Secret value cannot be empty or dialog canceled.")
+		return
+	}
+
+	// === Store Secret (Error handling needed before optional steps) ===
+	if a.config == nil {
+		log.Println("Error: Cannot add secret, application config is nil.")
+		ui.ShowNotification("Internal Error", "Application configuration not loaded.")
+		return
+	}
+	err = a.config.AddSecretReference(name, value)
+	if err != nil {
+		log.Printf("Error adding/updating secret '%s': %v", name, err)
+		ui.ShowNotification("Error", fmt.Sprintf("Failed to store secret '%s'. See logs.", name))
+		return // Stop here if storing the secret failed
+	} else {
+		log.Printf("Secret '%s' updated in keychain and config.json.", name)
+		// Don't notify yet, wait until optional steps are done or skipped
+	}
+
+	// === Step 3 (Optional): Ask to add replacement rule ===
+	// Use zenity.Question which returns error (nil on OK, ErrCanceled on Cancel/Close)
+	err = zenity.Question(
+		fmt.Sprintf("Secret '%s' stored successfully.\n\nDo you want to create a basic replacement rule for it now?\n(Replaces occurrences of the secret with entered text)", name),
+		zenity.Title(appName+" - Optional Step 3: Add Replacement Rule?"),
+		zenity.InfoIcon, // Use Info or Question icon
+		zenity.OKLabel("Yes, Add Rule"),
+		zenity.CancelLabel("No, Just Store Secret"),
+	)
+
+	addRule := (err == nil) // User clicked "Yes" if err is nil
+
+	if err != nil && !errors.Is(err, zenity.ErrCanceled) {
+		// Log unexpected error, but treat as "No"
+		log.Printf("Error showing 'Add Rule?' dialog: %v. Skipping rule creation.", err)
+		addRule = false
+	}
+
+	if !addRule { // User chose No, or dialog was canceled/errored
+		log.Println("Skipping optional replacement rule creation.")
+		ui.ShowNotification("Secret Stored", fmt.Sprintf("Secret '%s' stored. Manual restart required to activate.", name))
+		return // Finish workflow
+	}
+
+	// === Step 4 (Optional): Get Replacement String ===
+	replaceWithString, err := zenity.Entry(
+		fmt.Sprintf("Step 4: Enter text to replace '{{%s}}' with:\n(e.g., [REDACTED_KEY], MyPlaceholder)", name), // Corrected placeholder format in prompt
+		zenity.Title(appName+" - Add Replacement Rule"),
+	)
+	if err != nil {
+		// Handle cancel/error for replacement string entry
+		if errors.Is(err, zenity.ErrCanceled) {
+			log.Println("Rule creation canceled by user (replacement text entry).")
+		} else {
+			log.Printf("Error getting replacement text via zenity: %v", err)
+		}
+		ui.ShowNotification("Rule Creation Canceled", fmt.Sprintf("Secret '%s' stored, but rule creation canceled. Manual restart required for secret.", name))
+		return
+	}
+	// Allow empty replacement string if desired
+
+	// === Step 5 (Optional): Select Profile ===
+	if a.config.Profiles == nil || len(a.config.Profiles) == 0 {
+		log.Println("Cannot add replacement rule: No profiles found in configuration.")
+		ui.ShowNotification("Cannot Add Rule", "No profiles exist. Please add a profile manually first.")
+		ui.ShowNotification("Secret Stored", fmt.Sprintf("Secret '%s' stored. Manual restart required to activate.", name)) // Remind about secret
+		return
+	}
+
+	profileNames := make([]string, len(a.config.Profiles))
+	profileMap := make(map[string]int) // Map name back to index
+	for i, p := range a.config.Profiles {
+		profileNames[i] = p.Name
+		profileMap[p.Name] = i
+	}
+
+	selectedProfileName, err := zenity.List(
+		"Step 5: Select Profile to add the rule to:",
+		profileNames,
+		zenity.Title(appName+" - Add Replacement Rule"),
+	)
+	if err != nil {
+		if errors.Is(err, zenity.ErrCanceled) {
+			log.Println("Rule creation canceled by user (profile selection).")
+		} else {
+			log.Printf("Error getting profile selection via zenity list: %v", err)
+		}
+		ui.ShowNotification("Rule Creation Canceled", fmt.Sprintf("Secret '%s' stored, but rule creation canceled. Manual restart required for secret.", name))
+		return
+	}
+	if selectedProfileName == "" { // Should not happen if list not empty, but check
+		log.Println("Rule creation aborted: No profile selected.")
+		ui.ShowNotification("Rule Creation Canceled", fmt.Sprintf("Secret '%s' stored, but rule creation canceled (no profile selected). Manual restart required for secret.", name))
+		return
+	}
+
+	// === Add the Rule to Config and Save ===
+	newReplacement := config.Replacement{
+		Regex:        fmt.Sprintf("{{%s}}", name), // Use placeholder for regex
+		ReplaceWith:  replaceWithString,
+		PreserveCase: false, // Sensible default for secrets
+		ReverseWith:  "",    // Default to empty
+	}
+
+	// Find the target profile index
+	targetProfileIndex, found := profileMap[selectedProfileName]
+	if !found { // Should be impossible if List worked correctly
+		log.Printf("Internal Error: Selected profile '%s' not found in config map.", selectedProfileName)
+		ui.ShowNotification("Internal Error", "Selected profile not found.")
+		ui.ShowNotification("Secret Stored", fmt.Sprintf("Secret '%s' stored. Manual restart required to activate.", name)) // Remind about secret
+		return
+	}
+
+	// Append the replacement to the profile
+	a.config.Profiles[targetProfileIndex].Replacements = append(a.config.Profiles[targetProfileIndex].Replacements, newReplacement)
+	log.Printf("Prepared replacement rule for secret '%s' to be added to profile '%s'.", name, selectedProfileName)
+
+	// Save the config again with the added rule
+	err = a.config.Save()
+	if err != nil {
+		log.Printf("Error saving config after adding replacement rule for secret '%s': %v", name, err)
+		ui.ShowNotification("Save Error", "Failed to save config after adding replacement rule.")
+		// Attempt to roll back in-memory change
+		prof := &a.config.Profiles[targetProfileIndex]
+		if len(prof.Replacements) > 0 {
+			prof.Replacements = prof.Replacements[:len(prof.Replacements)-1]
+		}
+	} else {
+		log.Printf("Successfully added replacement rule for '%s' to profile '%s' and saved config.", name, selectedProfileName)
+		// Final success notification
+		ui.ShowNotification("Secret & Rule Added", fmt.Sprintf("Secret '%s' stored and rule added to profile '%s'. Manual restart required to activate.", name, selectedProfileName))
+	}
+}
+
+// onListSecrets is called when the List Secrets menu item is clicked
+func (a *Application) onListSecrets() {
+	log.Println("List Secrets menu item clicked.")
+	if a.config == nil {
+		log.Println("Error: Cannot list secrets, application config is nil.")
+		ui.ShowNotification("Internal Error", "Application configuration not loaded.")
+		return
+	}
+	names := a.config.GetSecretNames()
+	var message string
+	var dialogMessage string
+	if len(names) == 0 {
+		message = "No secrets are currently managed in config.json."
+		dialogMessage = message
+		log.Println(message)
+	} else {
+		messageBody := "- " + strings.Join(names, "\n- ")
+		logMessage := fmt.Sprintf("Managed secrets (%d total):\n%s", len(names), messageBody) // Detailed for log
+		dialogMessage = logMessage                                                             // Show details in dialog too
+		message = fmt.Sprintf("Found %d managed secret(s).", len(names))                       // Brief for notification
+		log.Printf("Listing managed secrets:\n%s", logMessage)                                 // Log details
+	}
+	// Show brief notification first, then detailed dialog
+	ui.ShowNotification("Managed Secrets", message)
+	zenity.Info(dialogMessage, zenity.Title(config.DefaultKeyringService+" - Managed Secrets"), zenity.InfoIcon)
+}
+
+// onRemoveSecret is called when the Remove Secret menu item is clicked
+func (a *Application) onRemoveSecret() {
+	log.Println("Remove Secret menu item clicked.")
+	appName := config.DefaultKeyringService
+
+	if a.config == nil {
+		log.Println("Error: Cannot remove secret, application config is nil.")
+		ui.ShowNotification("Internal Error", "Application configuration not loaded.")
+		return
+	}
+
+	names := a.config.GetSecretNames()
+	if len(names) == 0 {
+		log.Println("No secrets to remove.")
+		msg := "No secrets are currently managed."
+		ui.ShowNotification("Remove Secret", msg)
+		zenity.Info(msg, zenity.Title(appName+" - Remove Secret"), zenity.InfoIcon)
+		return
+	}
+
+	nameToRemove, err := zenity.List(
+		"Select secret to remove:",
+		names,
+		zenity.Title(appName+" - Remove Secret"),
+	)
+	if err != nil {
+		if errors.Is(err, zenity.ErrCanceled) {
+			log.Println("Remove secret canceled by user.")
+			ui.ShowNotification("Operation Canceled", "Remove secret canceled.")
+		} else {
+			log.Printf("Error getting selection via zenity list: %v", err)
+			ui.ShowNotification("Input Error", "Failed to get secret selection.")
+		}
+		return
+	}
+	if nameToRemove == "" {
+		log.Println("Remove secret aborted: No secret selected.")
+		ui.ShowNotification("Operation Canceled", "No secret selected for removal.")
+		return
+	}
+
+	err = zenity.Question(
+		fmt.Sprintf("Are you sure you want to remove the secret '%s'?\n\nThis will remove it from the OS keychain and the application's config. This cannot be undone.", nameToRemove),
+		zenity.Title(appName+" - Confirm Removal"),
+		zenity.WarningIcon,
+		zenity.OKLabel("Remove"),
+		zenity.CancelLabel("Cancel"),
+	)
+
+	confirmed := (err == nil) // Confirmed if error is nil
+
+	if err != nil && !errors.Is(err, zenity.ErrCanceled) { // Log unexpected errors
+		log.Printf("Error displaying confirmation dialog: %v", err)
+		ui.ShowNotification("Dialog Error", "Failed to show confirmation dialog.")
+		return // Abort on unexpected error
+	}
+
+	if !confirmed { // Handle Cancel or other errors treated as cancel
+		log.Printf("Removal of secret '%s' canceled by user or dialog error.", nameToRemove)
+		ui.ShowNotification("Operation Canceled", "Secret removal canceled.")
+		return
+	}
+
+	// Remove Secret
+	err = a.config.RemoveSecretReference(nameToRemove)
+	if err != nil {
+		log.Printf("Error removing secret '%s': %v", nameToRemove, err)
+		ui.ShowNotification("Error", fmt.Sprintf("Failed to remove secret '%s'. See logs.", nameToRemove))
+	} else {
+		log.Printf("Secret '%s' removed from config and potentially keyring.", nameToRemove)
+		ui.ShowNotification("Secret Removed", fmt.Sprintf("Secret '%s' removed. Manual restart required for change to take effect.", nameToRemove))
+	}
+}
+
+// --- Add Simple Rule Handler (Corrected using separate dialogs) ---
+
+// onAddSimpleRule handles the user flow for adding a 1:1 replacement rule
+func (a *Application) onAddSimpleRule() {
+	log.Println("Add Simple Rule menu item clicked.")
+	appName := config.DefaultKeyringService // Use for dialog titles
+
+	// === Step 1: Check for existing profiles ===
+	if a.config == nil || a.config.Profiles == nil || len(a.config.Profiles) == 0 {
+		log.Println("Error: Cannot add rule, no profiles found in configuration.")
+		zenity.Error("No profiles found. Please add a profile manually in config.json first.",
+			zenity.Title(appName+" - Error"),
+			zenity.ErrorIcon)
+		return
+	}
+
+	// === Step 2: Select Profile ===
+	profileNames := make([]string, len(a.config.Profiles))
+	profileMap := make(map[string]int) // Map name back to index
+	for i, p := range a.config.Profiles {
+		profileNames[i] = p.Name
+		profileMap[p.Name] = i
+	}
+
+	selectedProfileName, err := zenity.List(
+		"Step 1: Select Profile to add the rule to:", // Renamed step in title
+		profileNames,
+		zenity.Title(appName+" - Add Simple Rule"),
+		zenity.Height(300), // Adjust height if needed
+	)
+	if err != nil {
+		if errors.Is(err, zenity.ErrCanceled) {
+			log.Println("Add simple rule canceled by user (profile selection).")
+			ui.ShowNotification("Operation Canceled", "Add simple rule canceled.")
+		} else {
+			log.Printf("Error getting profile selection via zenity list: %v", err)
+			ui.ShowNotification("Input Error", "Failed to get profile selection.")
+		}
+		return
+	}
+	if selectedProfileName == "" { // Should not happen if list not empty, but check
+		log.Println("Add simple rule aborted: No profile selected.")
+		ui.ShowNotification("Operation Canceled", "No profile selected.")
+		return
+	}
+
+	// === Step 3: Get Source Text ===
+	sourceText, err := zenity.Entry(
+		"Step 2: Enter Source Text\n(Text to find and replace. Special characters will be treated literally.)",
+		zenity.Title(appName+" - Add Simple Rule"),
+		zenity.DisallowEmpty(), // Ensure source text is not empty
+	)
+	if err != nil {
+		if errors.Is(err, zenity.ErrCanceled) {
+			log.Println("Add simple rule canceled by user (source text entry).")
+			ui.ShowNotification("Operation Canceled", "Add simple rule canceled.")
+		} else {
+			log.Printf("Error getting source text via zenity: %v", err)
+			ui.ShowNotification("Input Error", "Failed to get source text input.")
+		}
+		return
+	}
+	// No need for explicit empty check as zenity.DisallowEmpty handles it
+
+	// === Step 4: Get Replacement Text ===
+	replacementText, err := zenity.Entry(
+		"Step 3: Enter Replacement Text\n(Text to replace the source text with. Can be empty.)",
+		zenity.Title(appName+" - Add Simple Rule"),
+		// Allow empty replacement text
+	)
+	if err != nil {
+		if errors.Is(err, zenity.ErrCanceled) {
+			log.Println("Add simple rule canceled by user (replacement text entry).")
+			ui.ShowNotification("Operation Canceled", "Add simple rule canceled.")
+		} else {
+			log.Printf("Error getting replacement text via zenity: %v", err)
+			ui.ShowNotification("Input Error", "Failed to get replacement text input.")
+		}
+		return
+	}
+
+	// === Step 5: Ask about Case Sensitivity ===
+	err = zenity.Question(
+		"Step 4: Make this rule case-insensitive?\n(Treat 'A' and 'a' as the same)",
+		zenity.Title(appName+" - Add Simple Rule"),
+		zenity.QuestionIcon,
+		zenity.OKLabel("Yes"),
+		zenity.CancelLabel("No"), // "No" corresponds to ErrCanceled
+	)
+
+	caseInsensitive := false
+	if err == nil {
+		// User clicked "Yes"
+		caseInsensitive = true
+		log.Println("Case-insensitive option selected.")
+	} else if errors.Is(err, zenity.ErrCanceled) {
+		// User clicked "No"
+		caseInsensitive = false
+		log.Println("Case-sensitive option selected.")
+	} else {
+		// Unexpected error during question dialog
+		log.Printf("Error getting case sensitivity preference via zenity: %v", err)
+		ui.ShowNotification("Input Error", "Failed to get case sensitivity preference.")
+		return
+	}
+
+	// === Step 6: Construct Rule ===
+	escapedSourceText := regexp.QuoteMeta(sourceText)
+	regexString := escapedSourceText
+	if caseInsensitive {
+		regexString = "(?i)" + escapedSourceText
+	}
+
+	newRule := config.Replacement{
+		Regex:        regexString,
+		ReplaceWith:  replacementText,
+		PreserveCase: false, // Keep false for simple 1:1 rules
+		ReverseWith:  "",    // Not applicable
+	}
+
+	log.Printf("Constructed new rule: Regex='%s', ReplaceWith='%s'", newRule.Regex, newRule.ReplaceWith)
+
+	// === Step 7: Add Rule to Config and Save ===
+	targetProfileIndex, found := profileMap[selectedProfileName]
+	if !found { // Should be impossible if List worked correctly
+		log.Printf("Internal Error: Selected profile '%s' not found in internal map.", selectedProfileName)
+		ui.ShowNotification("Internal Error", "Selected profile could not be found.")
+		return
+	}
+
+	// Append the replacement to the profile
+	a.config.Profiles[targetProfileIndex].Replacements = append(a.config.Profiles[targetProfileIndex].Replacements, newRule)
+	log.Printf("Prepared simple replacement rule to be added to profile '%s'.", selectedProfileName)
+
+	// Save the config
+	err = a.config.Save()
+	if err != nil {
+		log.Printf("Error saving config after adding simple rule to profile '%s': %v", selectedProfileName, err)
+		ui.ShowNotification("Save Error", "Failed to save config after adding rule.")
+		// Attempt to roll back the change in memory
+		prof := &a.config.Profiles[targetProfileIndex]
+		if len(prof.Replacements) > 0 {
+			prof.Replacements = prof.Replacements[:len(prof.Replacements)-1]
+		}
+	} else {
+		log.Printf("Successfully added simple rule to profile '%s' and saved config.", selectedProfileName)
+		// Final success notification
+		ui.ShowNotification("Rule Added", fmt.Sprintf("Rule added to profile '%s'. Use 'Reload Configuration' to apply.", selectedProfileName))
+	}
+}
+
+// --- End Add Simple Rule Handler ---

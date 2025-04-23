@@ -1,3 +1,4 @@
+// ==== internal/ui/systray.go ====
 package ui
 
 import (
@@ -6,23 +7,33 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	//"regexp" // <-- Import regexp
 	"strings"
 	"time"
 
 	"github.com/getlantern/systray"
 	"github.com/TanaroSch/clipboard-regex-replace/internal/config"
+	// *** Ensure golang.org/x/term is NOT imported if no longer used ***
 )
 
 // SystrayManager handles the system tray icon and menu
 type SystrayManager struct {
-	config         *config.Config
-	version        string
-	onReloadConfig func()
-	onRestart      func()
-	onQuit         func()
-	onRevert       func()
-	embeddedIcon   []byte
-	miRevert       *systray.MenuItem
+	config           *config.Config
+	version          string
+	onReloadConfig   func()
+	onRestart        func()
+	onQuit           func()
+	onRevert         func()
+	onOpenConfig     func()
+	onViewLastDiff   func()
+	onAddSecret      func() // Callback for Add/Update Secret
+	onListSecrets    func() // Callback for List Secrets
+	onRemoveSecret   func() // Callback for Remove Secret
+	onAddSimpleRule  func() // <-- Add callback for simple rule
+	embeddedIcon     []byte
+	miRevert         *systray.MenuItem
+	miViewLastDiff   *systray.MenuItem
+	profileMenuItems map[int]*systray.MenuItem
 }
 
 // NewSystrayManager creates a new system tray manager
@@ -34,15 +45,74 @@ func NewSystrayManager(
 	onRestart func(),
 	onQuit func(),
 	onRevert func(),
+	onOpenConfig func(),
+	onViewLastDiff func(),
+	onAddSecret func(),
+	onListSecrets func(),
+	onRemoveSecret func(),
+	onAddSimpleRule func(), // <-- Add parameter for simple rule callback
 ) *SystrayManager {
 	return &SystrayManager{
-		config:         cfg,
-		version:        version,
-		onReloadConfig: onReloadConfig,
-		onRestart:      onRestart,
-		onQuit:         onQuit,
-		onRevert:       onRevert,
-		embeddedIcon:   embeddedIcon,
+		config:           cfg,
+		version:          version,
+		embeddedIcon:     embeddedIcon,
+		onReloadConfig:   onReloadConfig,
+		onRestart:        onRestart,
+		onQuit:           onQuit,
+		onRevert:         onRevert,
+		onOpenConfig:     onOpenConfig,
+		onViewLastDiff:   onViewLastDiff,
+		profileMenuItems: make(map[int]*systray.MenuItem),
+		onAddSecret:      onAddSecret,
+		onListSecrets:    onListSecrets,
+		onRemoveSecret:   onRemoveSecret,
+		onAddSimpleRule:  onAddSimpleRule, // <-- Store the callback
+	}
+}
+
+// UpdateConfig updates the configuration used by the systray manager
+// and adjusts relevant UI elements like Revert status and Profile checkmarks.
+func (s *SystrayManager) UpdateConfig(newCfg *config.Config) {
+	log.Println("SystrayManager: Updating config reference.")
+	s.config = newCfg // Update internal reference
+
+	// Update Revert menu item state based on config flag
+	if s.miRevert != nil {
+		if s.config != nil && s.config.TemporaryClipboard {
+			log.Println("SystrayManager: TemporaryClipboard is enabled in new config.")
+			// Enable/disable state is handled by UpdateRevertStatus based on clipboard content
+		} else {
+			log.Println("SystrayManager: TemporaryClipboard disabled or config nil. Disabling Revert menu item.")
+			s.miRevert.Disable() // Permanently disable if feature is off
+		}
+	} else if s.config != nil && s.config.TemporaryClipboard {
+		// If the item didn't exist but should now, it requires a restart to add it.
+		log.Println("SystrayManager: TemporaryClipboard is now enabled, but Revert item cannot be added without restart.")
+	}
+
+	// Update checkmarks on existing profile menu items
+	if s.profileMenuItems != nil && s.config != nil && s.config.Profiles != nil {
+		log.Printf("SystrayManager: Updating profile menu item checkmarks (%d items, %d profiles)", len(s.profileMenuItems), len(s.config.Profiles))
+		for i, menuItem := range s.profileMenuItems {
+			if menuItem == nil {
+				log.Printf("SystrayManager: Skipping nil profile menu item at index %d", i)
+				continue
+			}
+			if i < len(s.config.Profiles) { // Check index bounds against NEW config
+				profile := s.config.Profiles[i] // Get profile from NEW config
+				log.Printf("SystrayManager: Updating checkmark for profile '%s' (index %d, enabled: %t)", profile.Name, i, profile.Enabled)
+				newText := "  " + profile.Name
+				if profile.Enabled {
+					newText = "✓ " + profile.Name
+				}
+				menuItem.SetTitle(newText) // Update title to reflect checkmark status
+			} else {
+				log.Printf("SystrayManager: Profile index %d is out of bounds after reload. Disabling related menu item.", i)
+				menuItem.Disable()
+			}
+		}
+	} else {
+		log.Println("SystrayManager: Skipping profile menu item update (no items or no profiles in config).")
 	}
 }
 
@@ -51,13 +121,32 @@ func (s *SystrayManager) Run() {
 	systray.Run(s.onReady, s.onExit)
 }
 
-// UpdateRevertStatus enables or disables the revert menu item
+// UpdateRevertStatus enables or disables the revert menu item based on clipboard state
 func (s *SystrayManager) UpdateRevertStatus(enabled bool) {
 	if s.miRevert != nil {
-		if enabled {
+		// Only allow enabling if the feature itself is enabled in the config
+		if enabled && s.config != nil && s.config.TemporaryClipboard {
+			log.Println("SystrayManager: Enabling Revert menu item.")
 			s.miRevert.Enable()
 		} else {
+			// Disable if not enabled OR if the feature is turned off
+			log.Println("SystrayManager: Disabling Revert menu item.")
 			s.miRevert.Disable()
+		}
+	}
+}
+
+// UpdateViewLastDiffStatus enables or disables the view diff menu item
+func (s *SystrayManager) UpdateViewLastDiffStatus(enabled bool) {
+	if s.miViewLastDiff != nil {
+		if enabled {
+			log.Println("SystrayManager: Enabling View Last Change Details menu item.")
+			s.miViewLastDiff.SetTitle("View Last Change Details") // Ensure title is correct
+			s.miViewLastDiff.Enable()
+		} else {
+			log.Println("SystrayManager: Disabling View Last Change Details menu item.")
+			s.miViewLastDiff.SetTitle("View Last Change Details") // Keep title consistent
+			s.miViewLastDiff.Disable()
 		}
 	}
 }
@@ -65,248 +154,344 @@ func (s *SystrayManager) UpdateRevertStatus(enabled bool) {
 // onReady is called by systray once the tray is ready.
 func (s *SystrayManager) onReady() {
 	// Set title and tooltip
-	systray.SetTitle(fmt.Sprintf("Clipboard Regex Replace %s", s.version))
-	systray.SetTooltip(fmt.Sprintf("Clipboard Regex Replace %s", s.version))
-	systray.SetIcon(s.embeddedIcon)
+	title := fmt.Sprintf("Clipboard Regex Replace %s", s.version)
+	systray.SetTitle(title)
+	systray.SetTooltip(title)
+	if len(s.embeddedIcon) > 0 {
+		systray.SetIcon(s.embeddedIcon)
+	} else {
+		log.Println("Warning: No embedded icon data to set for systray.")
+	}
 
 	// Add version info (disabled)
 	miVersion := systray.AddMenuItem(fmt.Sprintf("Version: %s", s.version), "Clipboard Regex Replace version")
 	miVersion.Disable()
+	systray.AddSeparator()
 
-	// Add profiles menu
-	s.updateProfileMenuItems()
+	// Build the profile submenu
+	s.updateProfileMenuItems() // This already has "Add New Profile"
+	systray.AddSeparator()
 
-	// Add configuration and application options
-	miReloadConfig := systray.AddMenuItem("Reload Configuration", "Reload configuration from config.json")
-	miRestartApp := systray.AddMenuItem("Restart Application", "Completely restart the application to refresh menu")
+	// --- Add Secret Management Menu ---
+	miManageSecrets := systray.AddMenuItem("Manage Secrets", "Add/Remove sensitive values")
+	miAddSecret := miManageSecrets.AddSubMenuItem("Add/Update Secret...", "Store a new sensitive value")
+	miListSecrets := miManageSecrets.AddSubMenuItem("List Secret Names", "Show names of stored secrets")
+	miRemoveSecret := miManageSecrets.AddSubMenuItem("Remove Secret...", "Delete a stored secret")
 
-	// Add clipboard revert option if enabled
-	if s.config.TemporaryClipboard {
+	// --- Add Simple Rule Menu Item ---
+	miAddSimpleRule := systray.AddMenuItem("Add Simple Rule...", "Add a 1:1 text replacement rule to a profile") // <-- New Item
+
+	systray.AddSeparator()
+
+	// Config & App Control - Update tooltips for restart requirement
+	miReloadConfig := systray.AddMenuItem("Reload Configuration", "Reload config (manual restart needed for new secrets/hotkeys)")
+	miOpenConfig := systray.AddMenuItem("Open Config File", "Open config.json in default editor")
+	s.miViewLastDiff = systray.AddMenuItem("View Last Change Details", "Show differences from the last replacement")
+	s.miViewLastDiff.Disable()
+	miRestartApp := systray.AddMenuItem("Restart Application", "Restart (needed after adding/removing secrets or profiles)")
+
+	// Revert Option
+	if s.config != nil && s.config.TemporaryClipboard {
+		log.Println("SystrayManager: TemporaryClipboard enabled, adding Revert menu item.")
 		s.miRevert = systray.AddMenuItem("Revert to Original", "Revert to original clipboard text")
-		s.miRevert.Disable() // Disabled initially until we have an original to revert to
+		s.miRevert.Disable()
+	} else {
+		log.Println("SystrayManager: TemporaryClipboard disabled or config nil, skipping Revert menu item creation.")
 	}
 
-	// Add quit option
+	systray.AddSeparator()
 	miQuit := systray.AddMenuItem("Quit", "Exit the application")
 
-	// Set up menu handlers
+	// --- Set up menu handlers in goroutines ---
+
 	go func() {
 		for range miReloadConfig.ClickedCh {
+			log.Println("Reload Configuration menu item clicked.")
 			if s.onReloadConfig != nil {
 				s.onReloadConfig()
 			}
 		}
 	}()
-
+	go func() {
+		for range miOpenConfig.ClickedCh {
+			log.Println("Open Config File menu item clicked.")
+			if s.onOpenConfig != nil {
+				s.onOpenConfig()
+			}
+		}
+	}()
+	if s.miViewLastDiff != nil && s.onViewLastDiff != nil {
+		go func() {
+			for range s.miViewLastDiff.ClickedCh {
+				log.Println("View Last Change Details menu item clicked.")
+				s.onViewLastDiff()
+			}
+		}()
+	}
 	go func() {
 		for range miRestartApp.ClickedCh {
+			log.Println("Restart Application menu item clicked.")
 			if s.onRestart != nil {
 				s.onRestart()
 			}
 		}
 	}()
-
-	if s.config.TemporaryClipboard && s.miRevert != nil {
+	if s.miRevert != nil && s.onRevert != nil {
 		go func() {
 			for range s.miRevert.ClickedCh {
-				if s.onRevert != nil {
-					s.onRevert()
-				}
+				log.Println("Revert to Original menu item clicked.")
+				s.onRevert()
 			}
 		}()
 	}
 
+	// Secret Handlers
+	if s.onAddSecret != nil {
+		go func() {
+			for range miAddSecret.ClickedCh {
+				log.Println("Add/Update Secret menu item triggered.")
+				s.onAddSecret()
+			}
+		}()
+	}
+	if s.onListSecrets != nil {
+		go func() {
+			for range miListSecrets.ClickedCh {
+				log.Println("List Secret Names menu item triggered.")
+				s.onListSecrets()
+			}
+		}()
+	}
+	if s.onRemoveSecret != nil {
+		go func() {
+			for range miRemoveSecret.ClickedCh {
+				log.Println("Remove Secret menu item triggered.")
+				s.onRemoveSecret()
+			}
+		}()
+	}
+
+	// Add Simple Rule Handler <-- New Handler
+	if s.onAddSimpleRule != nil {
+		go func() {
+			for range miAddSimpleRule.ClickedCh {
+				log.Println("'Add Simple Rule...' menu item triggered.")
+				s.onAddSimpleRule()
+			}
+		}()
+	}
+
+	// Quit Handler
 	go func() {
 		<-miQuit.ClickedCh
+		log.Println("Quit menu item clicked.")
 		if s.onQuit != nil {
 			s.onQuit()
 		}
 		systray.Quit()
-		log.Println("Exiting application.")
 	}()
+
+	log.Println("Systray ready and menu configured.")
 }
 
 // onExit is called when the systray is exiting
 func (s *SystrayManager) onExit() {
-	// Clean-up code here if needed
+	log.Println("Systray exiting.")
 }
 
 // updateProfileMenuItems creates submenu items for each profile
 func (s *SystrayManager) updateProfileMenuItems() {
-	// Create a profiles submenu
+	s.profileMenuItems = make(map[int]*systray.MenuItem)
 	miProfiles := systray.AddMenuItem("Profiles", "Manage replacement profiles")
-
-	// Add menu items for each profile
-	for i := range s.config.Profiles {
-		profile := &s.config.Profiles[i]
-
-		// Create menu text
-		var menuText string
-		if profile.Enabled {
-			menuText = "✓ " + profile.Name
-		} else {
-			menuText = "  " + profile.Name
-		}
-
-		// Create menu item with tooltip
-		var tooltip string
-		if profile.ReverseHotkey != "" {
-			tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s, Reverse: %s)",
-				profile.Name, profile.Hotkey, profile.ReverseHotkey)
-		} else {
-			tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s)",
-				profile.Name, profile.Hotkey)
-		}
-
-		menuItem := miProfiles.AddSubMenuItem(menuText, tooltip)
-
-		// Handle clicks
-		go func(p *config.ProfileConfig, item *systray.MenuItem) {
-			for range item.ClickedCh {
-				// Toggle enabled status
-				p.Enabled = !p.Enabled
-
-				// Update menu text
-				if p.Enabled {
-					item.SetTitle("✓ " + p.Name)
-				} else {
-					item.SetTitle("  " + p.Name)
-				}
-
-				// Save config
-				if err := s.config.Save(); err != nil {
-					log.Printf("Failed to save config after toggling profile: %v", err)
-				}
-
-				// Notify user
-				status := map[bool]string{true: "enabled", false: "disabled"}[p.Enabled]
-				ShowNotification("Profile Updated",
-					fmt.Sprintf("Profile '%s' has been %s", p.Name, status))
-
-				// Reload config is called to re-register hotkeys
-				if s.onReloadConfig != nil {
-					s.onReloadConfig()
-				}
+	if s.config != nil && len(s.config.Profiles) > 0 {
+		for i := range s.config.Profiles {
+			profileIndex := i // Capture index for goroutine closure
+			if profileIndex >= len(s.config.Profiles) {
+				continue // Safety check in case config changes during loop setup
 			}
-		}(profile, menuItem)
+			profile := s.config.Profiles[profileIndex]
+			menuText := "  " + profile.Name
+			if profile.Enabled {
+				menuText = "✓ " + profile.Name
+			}
+			var tooltip string
+			if profile.ReverseHotkey != "" {
+				tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s, Reverse: %s)", profile.Name, profile.Hotkey, profile.ReverseHotkey)
+			} else {
+				tooltip = fmt.Sprintf("Toggle profile: %s (Hotkey: %s)", profile.Name, profile.Hotkey)
+			}
+			menuItem := miProfiles.AddSubMenuItem(menuText, tooltip)
+			s.profileMenuItems[profileIndex] = menuItem
+
+			go func(item *systray.MenuItem, idx int) {
+				for range item.ClickedCh {
+					// --- Safely access config and profile ---
+					if s.config == nil || s.config.Profiles == nil || idx >= len(s.config.Profiles) {
+						log.Printf("Error: Profile index %d out of bounds or config nil after config change. Cannot toggle.", idx)
+						ShowNotification("Menu Inconsistency", "Profile list changed. Please use Reload or Restart.")
+						continue
+					}
+					p := &s.config.Profiles[idx] // Get pointer to modify directly
+
+					// --- Toggle State ---
+					p.Enabled = !p.Enabled
+					log.Printf("Toggled profile '%s' to enabled=%t", p.Name, p.Enabled)
+
+					// --- Update Menu Item Visual ---
+					newText := "  " + p.Name
+					if p.Enabled {
+						newText = "✓ " + p.Name
+					}
+					item.SetTitle(newText)
+
+					// --- Save Config ---
+					if err := s.config.Save(); err != nil {
+						log.Printf("Failed to save config after toggling profile '%s': %v", p.Name, err)
+						ShowNotification("Save Error", fmt.Sprintf("Failed to save config after toggling '%s'", p.Name))
+						// Optionally attempt to revert in-memory state
+						p.Enabled = !p.Enabled
+						newText = "  " + p.Name
+						if p.Enabled { newText = "✓ " + p.Name }
+						item.SetTitle(newText)
+					} else {
+						// --- Notify & Reload ---
+						status := map[bool]string{true: "enabled", false: "disabled"}[p.Enabled]
+						ShowNotification("Profile Updated", fmt.Sprintf("Profile '%s' has been %s. Reloading...", p.Name, status))
+						if s.onReloadConfig != nil {
+							log.Println("Triggering internal config reload after profile toggle to update hotkeys.")
+							// Slight delay to allow notification to potentially show first
+							time.Sleep(150 * time.Millisecond)
+							s.onReloadConfig()
+						}
+					}
+				}
+			}(menuItem, profileIndex)
+		}
+	} else {
+		log.Println("No profiles defined in config or config is nil.")
+		noProfilesItem := miProfiles.AddSubMenuItem("(No profiles defined)", "Add profiles in config.json")
+		noProfilesItem.Disable()
 	}
-
-	// Add a separator
-	miProfiles.AddSubMenuItem("----------", "")
-
-	// Add new profile option
-	miAddProfile := miProfiles.AddSubMenuItem("➕ Add New Profile", "Create a new replacement profile")
-
-	// Handle add profile clicks
+	sepItem := miProfiles.AddSubMenuItem("----------", "Separator")
+	sepItem.Disable()
+	miAddProfile := miProfiles.AddSubMenuItem("➕ Add New Profile", "Adds a template profile to config.json (Restart Recommended)")
 	go func() {
 		for range miAddProfile.ClickedCh {
-			// Create a new profile
+			log.Println("'Add New Profile' clicked.")
+			if s.config == nil {
+				log.Println("Error: Cannot add profile, config is nil.")
+				ShowNotification("Internal Error", "Application configuration not loaded.")
+				continue
+			}
+			// Ensure unique name generation remains robust even with frequent additions
+			baseName := "New_Profile"
+			existingNames := make(map[string]bool)
+			if s.config.Profiles != nil {
+				for _, p := range s.config.Profiles {
+					existingNames[p.Name] = true
+				}
+			}
+
+			newProfileName := baseName
+			counter := 1
+			for existingNames[newProfileName] {
+				newProfileName = fmt.Sprintf("%s_%d", baseName, counter)
+				counter++
+			}
+
 			newProfile := config.ProfileConfig{
-				Name:          fmt.Sprintf("New Profile %s", time.Now().Format("15:04:05")),
-				Enabled:       true,
-				Hotkey:        "ctrl+alt+n",
-				ReverseHotkey: "", // Empty by default
+				Name:    newProfileName,
+				Enabled: true,
+				Hotkey:  "ctrl+alt+n", // Default new hotkey, might need adjustment by user
 				Replacements: []config.Replacement{
 					{
-						Regex:        "example",
-						ReplaceWith:  "replacement",
-						PreserveCase: false, // Default to false for backward compatibility
-						ReverseWith:  "",    // Empty by default
+						Regex:       fmt.Sprintf("text_for_%s", newProfileName),
+						ReplaceWith: "replacement_text",
 					},
 				},
 			}
-
-			// Add to config
 			s.config.Profiles = append(s.config.Profiles, newProfile)
-
-			// Save config
 			if err := s.config.Save(); err != nil {
-				log.Printf("Failed to save config after adding profile: %v", err)
-			}
-
-			// For adding profiles, we do need to restart to update the menu
-			ShowNotification("Profile Added",
-				fmt.Sprintf("New profile '%s' created. Restarting application to refresh menu.", newProfile.Name))
-
-			// Wait a moment for notification to show before restarting
-			time.Sleep(500 * time.Millisecond)
-			
-			// Call restart
-			if s.onRestart != nil {
-				s.onRestart()
+				log.Printf("Failed to save config after adding new profile template: %v", err)
+				ShowNotification("Error Adding Profile", "Failed to save updated config file.")
+				// Roll back in-memory change on save failure
+				if len(s.config.Profiles) > 0 {
+					s.config.Profiles = s.config.Profiles[:len(s.config.Profiles)-1]
+				}
+			} else {
+				log.Printf("Added new profile template '%s' and saved config.", newProfile.Name)
+				ShowNotification("Profile Template Added", fmt.Sprintf("Template '%s' added. Edit config.json and use 'Reload' or 'Restart Application'.", newProfile.Name))
+				// Note: The menu won't update automatically without a restart or explicit refresh logic
 			}
 		}
 	}()
 }
 
-// isDevMode checks if the application is running in development mode via "go run"
+// IsDevMode checks if the application is running in development mode
 func IsDevMode() bool {
 	execPath, err := os.Executable()
 	if err != nil {
-		return false
+		log.Printf("Warning: Could not get executable path in IsDevMode: %v", err)
+		return false // Assume not dev mode on error
 	}
-
-	// Check if the executable is in a temporary directory, which indicates we're running via "go run"
+	// Check if the executable path contains typical temporary build directories
+	isTempBuild := strings.Contains(execPath, string(filepath.Separator)+"go-build") ||
+		strings.Contains(execPath, string(filepath.Separator)+"tmp"+string(filepath.Separator)+"go-build") || // Linux /tmp
+		strings.Contains(execPath, string(filepath.Separator)+"Temp"+string(filepath.Separator)+"go-build") // Windows %TEMP%
+	if isTempBuild {
+		log.Printf("IsDevMode check: Detected temporary build path: %s. Assuming Dev Mode.", execPath)
+		return true
+	}
+	// Fallback: Check if it's in the general temp directory
 	tempDir := os.TempDir()
-	return strings.Contains(strings.ToLower(execPath), strings.ToLower(tempDir))
+	// Ensure paths are clean and compare directory prefixes
+	cleanedExecDir := filepath.Clean(filepath.Dir(execPath))
+	cleanedTempDir := filepath.Clean(tempDir)
+	if strings.HasPrefix(cleanedExecDir, cleanedTempDir) {
+		log.Printf("IsDevMode check: Executable path (%s) is within Temp directory (%s). Assuming Dev Mode.", cleanedExecDir, cleanedTempDir)
+		return true
+	}
+	log.Printf("IsDevMode check: Executable='%s'. Assuming Production Mode.", execPath)
+	return false
 }
 
-// RestartApplication restarts the current application
+// RestartApplication attempts to restart the current application cleanly.
 func RestartApplication() {
-	log.Println("Restarting application...")
-
-	// Check if we're running in development mode (go run)
+	log.Println("Attempting application restart...")
 	if IsDevMode() {
-		log.Println("Development mode detected. Instead of restarting, refreshing UI components...")
-
-		// In development mode, we won't actually restart
-		// Just return and let the caller handle UI refresh
-		ShowNotification("Dev Mode", "Menu changes will be visible after manually restarting the application")
+		log.Println("Development mode detected. Automatic restart is not supported.")
+		ShowNotification("Manual Restart Needed", "App running in dev mode. Please stop and run it again manually.")
 		return
 	}
-
-	// Production mode - actually restart the application
-	// Get the path to the current executable
 	execPath, err := os.Executable()
 	if err != nil {
-		log.Printf("Error getting executable path: %v", err)
-		ShowNotification("Error", "Failed to restart application")
+		log.Printf("Error getting executable path for restart: %v", err)
+		ShowNotification("Restart Error", "Failed to get executable path.")
 		return
 	}
-
-	// Get current working directory
 	cwd, err := os.Getwd()
 	if err != nil {
-		log.Printf("Error getting current working directory: %v", err)
-		ShowNotification("Error", "Failed to restart application")
-		return
+		log.Printf("Warning: Could not get CWD for restart: %v.", err)
+		cwd = ""
 	}
-
-	// Log paths for debugging
-	log.Printf("Executable path: %s", execPath)
-	log.Printf("Current working directory: %s", cwd)
-	log.Printf("Config should be at: %s", filepath.Join(cwd, "config.json"))
-
-	// Check if config file exists
-	if _, err := os.Stat(filepath.Join(cwd, "config.json")); err != nil {
-		log.Printf("Warning: Config file check failed: %v", err)
+	log.Printf("Attempting restart: Executable path: %s", execPath)
+	if cwd != "" {
+		log.Printf("Attempting restart: Setting CWD: %s", cwd)
 	} else {
-		log.Printf("Config file exists and is accessible")
+		log.Printf("Attempting restart: CWD not set.")
 	}
-
-	// Start a new process with the same executable
-	cmd := exec.Command(execPath)
+	cmd := exec.Command(execPath, os.Args[1:]...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Dir = cwd // Set the working directory to the current directory
-
-	// Start the new process
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
 	if err := cmd.Start(); err != nil {
-		log.Printf("Error starting new process: %v", err)
-		ShowNotification("Error", "Failed to restart application")
+		log.Printf("Error starting new process during restart: %v", err)
+		ShowNotification("Restart Error", fmt.Sprintf("Failed to start new application process: %v", err))
 		return
 	}
-
-	// Exit the current process
-	os.Exit(0)
+	log.Println("Successfully started new process. Exiting current process now.")
+	systray.Quit() // Use systray.Quit() to try and trigger onExit cleanly
+	os.Exit(0)     // Fallback exit
 }

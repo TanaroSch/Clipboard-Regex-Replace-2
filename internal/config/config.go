@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strings" // Needed for level comparison
 
 	"github.com/99designs/keyring"
 )
@@ -21,12 +22,14 @@ type ProfileConfig struct {
 
 // Config holds the application configuration
 type Config struct {
-	UseNotifications   bool              `json:"use_notifications"`
-	TemporaryClipboard bool              `json:"temporary_clipboard"`
-	AutomaticReversion bool              `json:"automatic_reversion"`
-	RevertHotkey       string            `json:"revert_hotkey"`
-	Profiles           []ProfileConfig   `json:"profiles"`
-	Secrets            map[string]string `json:"secrets,omitempty"` // Maps logical name -> "managed"
+	// UseNotifications   bool              `json:"use_notifications"` // DEPRECATED: Use new fields below
+	AdminNotificationLevel string            `json:"admin_notification_level"` // NEW: Controls verbosity ("None", "Error", "Warn", "Info")
+	NotifyOnReplacement    bool              `json:"notify_on_replacement"`    // NEW: Toggle for replacement success notifications
+	TemporaryClipboard     bool              `json:"temporary_clipboard"`
+	AutomaticReversion     bool              `json:"automatic_reversion"`
+	RevertHotkey           string            `json:"revert_hotkey"`
+	Profiles               []ProfileConfig   `json:"profiles"`
+	Secrets                map[string]string `json:"secrets,omitempty"` // Maps logical name -> "managed"
 
 	// Legacy support fields (for backward compatibility)
 	Hotkey       string        `json:"hotkey,omitempty"`
@@ -34,7 +37,7 @@ type Config struct {
 
 	// Non-JSON fields (runtime state)
 	configPath      string
-	keyringService  string            // e.g., "LLMClipboardFilter2"
+	keyringService  string            // e.g., "Clipboard Regex Replace"
 	resolvedSecrets map[string]string // Runtime map {"logicalName": "actualValue"}
 }
 
@@ -47,6 +50,7 @@ type Replacement struct {
 }
 
 const DefaultKeyringService = "Clipboard Regex Replace" // Define AppName constant
+const DefaultAdminNotificationLevel = "Warn"            // Define default level constant
 
 // GetConfigPath returns the path to the configuration file
 func (c *Config) GetConfigPath() string {
@@ -84,9 +88,19 @@ func Load(configPath string) (*Config, error) {
 		}
 	}
 
+	// First unmarshal into the new structure
 	err = json.Unmarshal(data, &config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse config file '%s': %w", configPath, err)
+	}
+
+	// Set default notification level if missing or empty after load
+	if strings.TrimSpace(config.AdminNotificationLevel) == "" {
+		log.Printf("AdminNotificationLevel not found or empty in config, setting default to '%s'", DefaultAdminNotificationLevel)
+		config.AdminNotificationLevel = DefaultAdminNotificationLevel
+		// Note: NotifyOnReplacement defaults to `false` (its zero value) if missing.
+		// This requires users to explicitly add `"notify_on_replacement": true`
+		// to their config if upgrading to re-enable replacement notifications.
 	}
 
 	// Store config path for future saves
@@ -123,12 +137,10 @@ func Load(configPath string) (*Config, error) {
 			// Continue without secrets? Or return error? For now, continue with warning.
 		} else {
 			for name := range config.Secrets { // We only need the name from config
-				// *** FIX IS HERE ***
 				item, err := kr.Get(name) // Get the Item struct
 				if err == nil {
 					config.resolvedSecrets[name] = string(item.Data) // Convert []byte to string
 					log.Printf("Successfully loaded secret '%s'.", name)
-					// *** END FIX ***
 				} else if err == keyring.ErrKeyNotFound {
 					log.Printf("Warning: Secret '%s' not found in keychain for service '%s'. Rules using it may fail.", name, config.keyringService)
 				} else {
@@ -177,6 +189,11 @@ func (c *Config) Save() error {
 		c.Secrets = make(map[string]string)
 	}
 
+	// Ensure default notification level if empty before saving
+	if strings.TrimSpace(c.AdminNotificationLevel) == "" {
+		c.AdminNotificationLevel = DefaultAdminNotificationLevel
+	}
+
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
@@ -205,7 +222,7 @@ func (c *Config) AddSecretReference(name, value string) error {
 		Key:         name, // Use logical name as the Key/Username
 		Data:        []byte(value),
 		Label:       fmt.Sprintf("Secret for %s used by %s", name, c.keyringService),
-		Description: "Managed by LLMClipboardFilter2",
+		Description: "Managed by Clipboard Regex Replace", // Updated description
 	})
 	if err != nil {
 		return fmt.Errorf("failed to store secret '%s' in keyring: %w", name, err)
@@ -216,20 +233,12 @@ func (c *Config) AddSecretReference(name, value string) error {
 	}
 	c.Secrets[name] = "managed" // Mark as managed in config
 
-	// ---- REMOVED THIS LINE ----
-	// // Update runtime map immediately
-	// if c.resolvedSecrets == nil {
-	// 	c.resolvedSecrets = make(map[string]string)
-	// }
-	// c.resolvedSecrets[name] = value
-	// ---- END REMOVED BLOCK ----
-
 	// Only save the updated config (with the "managed" entry)
 	// The actual secret value will be loaded during the next config reload.
 	return c.Save()
 }
 
-// RemoveSecretReference also needs the same correction (remove direct manipulation of resolvedSecrets)
+// RemoveSecretReference removes a secret from config and keyring
 func (c *Config) RemoveSecretReference(name string) error {
 	// Use specific config matching Load for keyring access
 	kr, err := keyring.Open(keyring.Config{
@@ -256,12 +265,6 @@ func (c *Config) RemoveSecretReference(name string) error {
 	if c.Secrets != nil {
 		delete(c.Secrets, name)
 	}
-	// ---- REMOVED THIS BLOCK ----
-	// // Remove from runtime map too
-	// if c.resolvedSecrets != nil {
-	// 	delete(c.resolvedSecrets, name)
-	// }
-	// ---- END REMOVED BLOCK ----
 
 	// Save the config with the secret reference removed
 	return c.Save()
@@ -294,11 +297,13 @@ func CreateDefaultConfig(configPath string) error {
 
 	// Create default config
 	defaultConfig := &Config{
-		UseNotifications:   true,
-		TemporaryClipboard: true,
-		AutomaticReversion: false,
-		RevertHotkey:       "ctrl+shift+alt+r",      // Changed default revert hotkey
-		Secrets:            make(map[string]string), // Initialize empty secrets map
+		// UseNotifications:   true, // DEPRECATED
+		AdminNotificationLevel: DefaultAdminNotificationLevel, // NEW Default
+		NotifyOnReplacement:    true,                          // NEW Default
+		TemporaryClipboard:     true,
+		AutomaticReversion:     false,
+		RevertHotkey:           "ctrl+shift+alt+r",      // Changed default revert hotkey
+		Secrets:                make(map[string]string), // Initialize empty secrets map
 		Profiles: []ProfileConfig{
 			{
 				Name:    "General Cleanup",

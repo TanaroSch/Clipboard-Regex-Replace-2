@@ -1,5 +1,3 @@
-# Clipboard Regex Replace [![GitHub release (latest by date)](https://img.shields.io/github/v/release/TanaroSch/Clipboard-Regex-Replace-2)](https://github.com/TanaroSch/Clipboard-Regex-Replace-2/releases/latest) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 **Instantly transform clipboard text using custom rules and global hotkeys.**
 
 Clipboard Regex Replace is a lightweight, standalone Go application that runs in your system tray. It monitors your keyboard for global hotkeys you define. When triggered, it automatically applies a series of predefined regex rules (including securely stored secrets) to your clipboard text, updates the clipboard, and optionally simulates a paste action. Manage rules, secrets, and profiles easily via the system tray menu.
@@ -16,18 +14,18 @@ Clipboard Regex Replace is a lightweight, standalone Go application that runs in
 
 *   🚀 **Global Hotkey Trigger:** Process clipboard content instantly with configurable hotkeys (e.g., `Ctrl+Alt+V`).
 *   🔧 **Powerful Regex Rules:** Define complex text replacements using regular expressions in `config.json`.
-*   🔒 **Secure Secret Management:** Store sensitive data (API keys, emails) securely in your OS keychain/credential store, referenced via `{{secret_name}}`. ([Details...](FEATURES.md#secure-secret-management))
-*   ⚙️ **Multiple Profiles:** Organize rules into different profiles, each with its own hotkey(s). Toggle profiles on-the-fly. ([Details...](FEATURES.md#multiple-profile-support))
-*   ➕ **Easy Rule/Secret Addition:** Add simple text replacements or manage secrets directly from the system tray menu using native dialogs. ([Details...](FEATURES.md#adding-simple-rules-via-system-tray))
+*   🔒 **Secure Secret Management:** Store sensitive data (API keys, emails) securely in your OS keychain/credential store, referenced via `{{secret_name}}`. ([Details...](docs/FEATURES.md#secure-secret-management))
+*   ⚙️ **Multiple Profiles:** Organize rules into different profiles, each with its own hotkey(s). Toggle profiles on-the-fly. ([Details...](docs/FEATURES.md#multiple-profile-support))
+*   ➕ **Easy Rule/Secret Addition:** Add simple text replacements or manage secrets directly from the system tray menu using native dialogs. ([Details...](docs/FEATURES.md#adding-simple-rules-via-system-tray))
 *   📋 **Clipboard Automation:** Automatically updates the clipboard and simulates a paste (Ctrl+V).
-*   ↔️ **Bidirectional & Case-Preserving:** Configure rules to reverse replacements or maintain original text casing. ([Details...](FEATURES.md#case-preserving-and-reversible-replacements))
+*   ↔️ **Bidirectional & Case-Preserving:** Configure rules to reverse replacements or maintain original text casing. ([Details...](docs/FEATURES.md#case-preserving-and-reversible-replacements))
 *   👁️ **Change Diff Viewer:** See exactly what changed with a browser-based diff view after each operation.
 *   📌 **System Tray Control:** Manage profiles, secrets, rules, view diffs, revert changes, reload config, and quit – all from the systray icon.
-*   🔔 **Notifications:** Get feedback via native OS notifications (Windows Toast, libnotify, etc.).
+*   🔔 **Configurable Notifications:** Separately control notifications for administrative events (errors, reloads, etc.) with verbosity levels and for successful clipboard replacements. ([Details...](docs/CONFIGURATION.md#configuration-options-explained))
 *   💻 **Cross-Platform:** Runs on Windows, macOS, and Linux (core functionality). Native features adapt to the OS.
 *   📦 **Standalone:** Single executable file (plus external `config.json`).
 
-➡️ **See [FEATURES.md](FEATURES.md) for in-depth explanations of key features.**
+➡️ **See [docs/FEATURES.md](docs/FEATURES.md) for in-depth explanations of key features.**
 
 ---
 
@@ -45,7 +43,7 @@ Clipboard Regex Replace is a lightweight, standalone Go application that runs in
 2.  **Configure:**
     *   Place the executable in a folder.
     *   Copy the `config.json.example` file to the same folder and rename it to `config.json`.
-    *   Edit `config.json` to define your desired hotkeys and replacement rules (see [Configuration](#configuration) below).
+    *   Edit `config.json` to define your desired hotkeys, notification settings, and replacement rules (see [Configuration](#configuration) below).
 3.  **Run:** Double-click the executable (or run from terminal). A system tray icon should appear.
 4.  **(Optional) Add Secrets:** Right-click the systray icon -> Manage Secrets -> Add/Update Secret... (Requires app restart after adding/removing secrets).
 5.  **(Optional) Add Simple Rules:** Right-click the systray icon -> Add Simple Rule... (Requires Config Reload).
@@ -73,9 +71,9 @@ Clipboard Regex Replace is a lightweight, standalone Go application that runs in
 
 ## Configuration
 
-The application uses a `config.json` file in the same directory as the executable to define global settings, secrets, and rule profiles.
+The application uses a `config.json` file in the same directory as the executable to define global settings, secrets, notification preferences, and rule profiles.
 
-➡️ **See [CONFIGURATION.md](CONFIGURATION.md) for detailed structure and examples.**
+➡️ **See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for detailed structure and examples.**
 
 ---
 
@@ -108,7 +106,7 @@ The application uses a `config.json` file in the same directory as the executabl
         3.  Applies matching regex rules from enabled profiles associated with that hotkey.
         4.  Updates the clipboard with the transformed text.
         5.  Simulates a paste action (like pressing Ctrl+V).
-        6.  Shows a notification (if enabled).
+        6.  Shows a notification (if enabled via `notify_on_replacement`).
 
 5.  **Viewing Changes:**
     *   Immediately after a transformation occurs via hotkey:
@@ -145,13 +143,13 @@ The application uses a `config.json` file in the same directory as the executabl
 
 ## Contributing & Building
 
-Information about requirements, building from source, project structure, and dependencies can be found in [CONTRIBUTING.md](CONTRIBUTING.md).
+Information about requirements, building from source, project structure, and dependencies can be found in [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ---
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for the detailed version history.
+See [docs/CHANGELOG.md](docs/CHANGELOG.md) for the detailed version history.
 
 ---
 

@@ -105,7 +105,10 @@ func (s *SystrayManager) UpdateConfig(newCfg *config.Config) {
 				if profile.Enabled {
 					newText = "✓ " + profile.Name
 				}
-				menuItem.SetTitle(newText) // Update title to reflect checkmark status
+				// Update Title AND Checked status for clarity if API supports it (getlantern/systray typically uses title prefix)
+				menuItem.SetTitle(newText)
+				// menuItem.SetChecked(profile.Enabled) // Use if SetChecked is available and preferred
+
 			} else {
 				log.Printf("SystrayManager: Profile index %d is out of bounds after reload. Disabling related menu item.", i)
 				menuItem.Disable()
@@ -327,8 +330,9 @@ func (s *SystrayManager) updateProfileMenuItems() {
 				for range item.ClickedCh {
 					// --- Safely access config and profile ---
 					if s.config == nil || s.config.Profiles == nil || idx >= len(s.config.Profiles) {
+						errMsg := "Profile list changed unexpectedly. Please use Reload or Restart."
 						log.Printf("Error: Profile index %d out of bounds or config nil after config change. Cannot toggle.", idx)
-						ShowNotification("Menu Inconsistency", "Profile list changed. Please use Reload or Restart.")
+						ShowAdminNotification(LevelWarn, "Menu Inconsistency", errMsg) // <<< CHANGED (Warn Level)
 						continue
 					}
 					p := &s.config.Profiles[idx] // Get pointer to modify directly
@@ -346,8 +350,9 @@ func (s *SystrayManager) updateProfileMenuItems() {
 
 					// --- Save Config ---
 					if err := s.config.Save(); err != nil {
+						errMsg := fmt.Sprintf("Failed to save config after toggling '%s'. Error: %v", p.Name, err)
 						log.Printf("Failed to save config after toggling profile '%s': %v", p.Name, err)
-						ShowNotification("Save Error", fmt.Sprintf("Failed to save config after toggling '%s'", p.Name))
+						ShowAdminNotification(LevelError, "Save Error", errMsg) // <<< CHANGED (Error Level)
 						// Optionally attempt to revert in-memory state
 						p.Enabled = !p.Enabled
 						newText = "  " + p.Name
@@ -356,7 +361,8 @@ func (s *SystrayManager) updateProfileMenuItems() {
 					} else {
 						// --- Notify & Reload ---
 						status := map[bool]string{true: "enabled", false: "disabled"}[p.Enabled]
-						ShowNotification("Profile Updated", fmt.Sprintf("Profile '%s' has been %s. Reloading...", p.Name, status))
+						msg := fmt.Sprintf("Profile '%s' has been %s. Reloading...", p.Name, status)
+						ShowAdminNotification(LevelInfo, "Profile Updated", msg) // <<< CHANGED (Info Level)
 						if s.onReloadConfig != nil {
 							log.Println("Triggering internal config reload after profile toggle to update hotkeys.")
 							// Slight delay to allow notification to potentially show first
@@ -380,7 +386,7 @@ func (s *SystrayManager) updateProfileMenuItems() {
 			log.Println("'Add New Profile' clicked.")
 			if s.config == nil {
 				log.Println("Error: Cannot add profile, config is nil.")
-				ShowNotification("Internal Error", "Application configuration not loaded.")
+				ShowAdminNotification(LevelError, "Internal Error", "Application configuration not loaded.") // <<< CHANGED (Error Level)
 				continue
 			}
 			// Ensure unique name generation remains robust even with frequent additions
@@ -412,15 +418,17 @@ func (s *SystrayManager) updateProfileMenuItems() {
 			}
 			s.config.Profiles = append(s.config.Profiles, newProfile)
 			if err := s.config.Save(); err != nil {
+				errMsg := fmt.Sprintf("Failed to save updated config file. Error: %v", err)
 				log.Printf("Failed to save config after adding new profile template: %v", err)
-				ShowNotification("Error Adding Profile", "Failed to save updated config file.")
+				ShowAdminNotification(LevelError, "Error Adding Profile", errMsg) // <<< CHANGED (Error Level)
 				// Roll back in-memory change on save failure
 				if len(s.config.Profiles) > 0 {
 					s.config.Profiles = s.config.Profiles[:len(s.config.Profiles)-1]
 				}
 			} else {
+				msg := fmt.Sprintf("Template '%s' added. Edit config.json and use 'Reload' or 'Restart Application'.", newProfile.Name)
 				log.Printf("Added new profile template '%s' and saved config.", newProfile.Name)
-				ShowNotification("Profile Template Added", fmt.Sprintf("Template '%s' added. Edit config.json and use 'Reload' or 'Restart Application'.", newProfile.Name))
+				ShowAdminNotification(LevelInfo, "Profile Template Added", msg) // <<< CHANGED (Info Level)
 				// Note: The menu won't update automatically without a restart or explicit refresh logic
 			}
 		}
@@ -459,14 +467,16 @@ func IsDevMode() bool {
 func RestartApplication() {
 	log.Println("Attempting application restart...")
 	if IsDevMode() {
+		msg := "App running in dev mode. Please stop and run it again manually."
 		log.Println("Development mode detected. Automatic restart is not supported.")
-		ShowNotification("Manual Restart Needed", "App running in dev mode. Please stop and run it again manually.")
+		ShowAdminNotification(LevelWarn, "Manual Restart Needed", msg) // <<< CHANGED (Warn Level)
 		return
 	}
 	execPath, err := os.Executable()
 	if err != nil {
+		errMsg := fmt.Sprintf("Failed to get executable path. Error: %v", err)
 		log.Printf("Error getting executable path for restart: %v", err)
-		ShowNotification("Restart Error", "Failed to get executable path.")
+		ShowAdminNotification(LevelError, "Restart Error", errMsg) // <<< CHANGED (Error Level)
 		return
 	}
 	cwd, err := os.Getwd()
@@ -487,11 +497,21 @@ func RestartApplication() {
 		cmd.Dir = cwd
 	}
 	if err := cmd.Start(); err != nil {
+		errMsg := fmt.Sprintf("Failed to start new application process: %v", err)
 		log.Printf("Error starting new process during restart: %v", err)
-		ShowNotification("Restart Error", fmt.Sprintf("Failed to start new application process: %v", err))
+		ShowAdminNotification(LevelError, "Restart Error", errMsg) // <<< CHANGED (Error Level)
 		return
 	}
 	log.Println("Successfully started new process. Exiting current process now.")
 	systray.Quit() // Use systray.Quit() to try and trigger onExit cleanly
 	os.Exit(0)     // Fallback exit
+}
+
+// GetAppIcon retrieves the embedded icon data.
+// Consider moving resource loading logic here or making it globally accessible if needed elsewhere in ui.
+func GetAppIcon() ([]byte, error) {
+	// This is a placeholder implementation. You should use your existing resource loading.
+	// Example using the pattern from internal/resources:
+	// return resources.GetIcon()
+	return nil, fmt.Errorf("icon loading not implemented in ui.GetAppIcon")
 }

@@ -2,17 +2,18 @@
 
 Clipboard Regex Replace reads its configuration from an external `config.json` file located in the same directory as the executable.
 
-This file allows you to define global settings, multiple rule profiles (each with their own hotkey), and references to securely stored secrets.
+This file allows you to define global settings, notification preferences, multiple rule profiles (each with their own hotkey), and references to securely stored secrets.
 
-See the main [README.md](README.md) for a general overview and usage instructions.
+See the main [README.md](../README.md) for a general overview and usage instructions.
 
 ## Example `config.json` Structure
 
-This example demonstrates two profiles: one for general privacy redaction and another specifically for credentials using secure secret management.
+This example demonstrates two profiles, global settings, and notification preferences.
 
 ```json
 {
-  "use_notifications": true,
+  "admin_notification_level": "Error",
+  "notify_on_replacement": true,
   "temporary_clipboard": true,
   "automatic_reversion": false,
   "revert_hotkey": "ctrl+shift+alt+r",
@@ -59,7 +60,15 @@ This example demonstrates two profiles: one for general privacy redaction and an
 ## Configuration Options Explained
 
 *   **Global Settings (Top Level):**
-    *   `use_notifications` (boolean): Enable/disable desktop notifications (default: `true`).
+    *   `admin_notification_level` (string): Controls the verbosity of notifications for administrative actions (config reload, errors, secret management, etc.). Valid levels (case-insensitive):
+        *   `"None"`: No admin notifications shown.
+        *   `"Error"`: Only show critical errors.
+        *   `"Warn"`: Show errors and warnings (Default).
+        *   `"Info"`: Show errors, warnings, and informational messages (most verbose).
+    *   `notify_on_replacement` (boolean): Toggles the notification shown *after* a successful clipboard replacement via hotkey.
+        *   `true`: Show notification (Default for new configs).
+        *   `false`: Do not show notification.
+        *   **Note for Upgraders:** If this field is missing (when upgrading from v1.7.1 or earlier), it defaults to `false`. You must explicitly add `"notify_on_replacement": true` to re-enable these notifications.
     *   `temporary_clipboard` (boolean): Store the original clipboard content before processing (default: `true`). Allows reverting.
     *   `automatic_reversion` (boolean): If `temporary_clipboard` is true, automatically revert to the original clipboard content shortly after pasting (default: `false`).
     *   `revert_hotkey` (string): Define a global hotkey (e.g., `"ctrl+shift+alt+r"`) to manually revert the clipboard if `temporary_clipboard` is true and `automatic_reversion` is false.

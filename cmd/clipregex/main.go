@@ -11,7 +11,7 @@ import (
 	"github.com/TanaroSch/clipboard-regex-replace/internal/ui" // Needed for potential panic notification
 )
 
-const version = "v1.7.1" // Bump version for secret management feature
+const version = "v1.7.2" // <<< BUMP VERSION for notification changes
 
 func main() {
 	// Configure logging maybe? (e.g., write to file)
@@ -31,12 +31,24 @@ func main() {
 		// Provide more context if it's a keyring issue maybe? Difficult to tell generically.
 		errMsg := fmt.Sprintf("FATAL: Error loading config/secrets: %v. Check config.json and OS keychain/credential manager access.", err)
 		log.Print(errMsg) // Use Println or Printf, not Fatalf yet
+
 		// Try to show a notification before exiting? Only if UI is somewhat initializable
-		ui.InitGlobalNotifications(true, config.DefaultKeyringService, nil) // Minimal init
-		ui.ShowNotification("Startup Error", errMsg)
+		// Attempt to initialize with temporary minimal config for notification
+		tempCfgForNotify := &config.Config{
+			AdminNotificationLevel: config.DefaultAdminNotificationLevel, // Use default level for startup errors
+			NotifyOnReplacement:    false,                               // Not relevant here
+		}
+		ui.InitGlobalNotifications(tempCfgForNotify, config.DefaultKeyringService, nil) // Minimal init
+		// Use the specific notification function with Error level
+		ui.ShowAdminNotification(ui.LevelError, "Startup Error", errMsg) // <<< CHANGED
 		// Now exit fatally
 		os.Exit(1)
 	}
+
+	// Initialize Notifications fully AFTER config is loaded successfully
+	// Retrieve icon data (error handled within New)
+	appIcon, _ := ui.GetAppIcon() // Assuming GetAppIcon exists or is added to ui
+	ui.InitGlobalNotifications(cfg, config.DefaultKeyringService, appIcon)
 
 	// Create and run the application
 	application := app.New(cfg, version)
@@ -53,7 +65,7 @@ func main() {
 
 			// Attempt to show a UI notification about the crash
 			// UI might not be fully running, but worth a try
-			ui.ShowNotification("Application Error", "A critical error occurred. Please check logs.")
+			ui.ShowAdminNotification(ui.LevelError, "Application Error", "A critical error occurred. Please check logs.") // <<< CHANGED
 
 			// Consider exiting with non-zero status
 			os.Exit(1)

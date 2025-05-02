@@ -23,3 +23,4 @@ Thumbs.db
 
 # Dependency directories (if you ever vendor dependencies)
 vendor/
+.VSCodeCounter/

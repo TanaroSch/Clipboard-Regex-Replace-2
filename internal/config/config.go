@@ -46,7 +46,7 @@ type Replacement struct {
 	ReverseWith  string `json:"reverse_with,omitempty"`
 }
 
-const DefaultKeyringService = "LLMClipboardFilter2" // Define AppName constant
+const DefaultKeyringService = "Clipboard Regex Replace" // Define AppName constant
 
 // GetConfigPath returns the path to the configuration file
 func (c *Config) GetConfigPath() string {

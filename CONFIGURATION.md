@@ -8,6 +8,8 @@ See the main [README.md](README.md) for a general overview and usage instruction
 
 ## Example `config.json` Structure
 
+This example demonstrates two profiles: one for general privacy redaction and another specifically for credentials using secure secret management.
+
 ```json
 {
   "use_notifications": true,
@@ -16,42 +18,37 @@ See the main [README.md](README.md) for a general overview and usage instruction
   "revert_hotkey": "ctrl+shift+alt+r",
   "secrets": {
     "my_api_key": "managed",
-    "personal_email": "managed"
+    "my_password": "managed"
   },
   "profiles": [
     {
-      "name": "General Cleanup",
+      "name": "Privacy Redaction",
       "enabled": true,
       "hotkey": "ctrl+alt+v",
       "replacements": [
         {
-          "regex": "\\s+",
-          "replace_with": " "
+          "regex": "\\b\\(?\\d{3}\\)?[-.\\s]?\\d{3}[-.\\s]?\\d{4}\\b",
+          "replace_with": "REDACTED_PHONE"
+        },
+        {
+          "regex": "(?i)(John Doe|Jane Smith)",
+          "replace_with": "Redacted Name",
+          "preserve_case": true
         }
       ]
     },
     {
-      "name": "API Key Redaction",
+      "name": "Credentials Redaction",
       "enabled": true,
-      "hotkey": "ctrl+alt+1",
+      "hotkey": "ctrl+alt+c",
       "replacements": [
         {
           "regex": "{{my_api_key}}",
-          "replace_with": "[REDACTED_API_KEY]"
-        }
-      ]
-    },
-    {
-      "name": "Email Obfuscation",
-      "enabled": true,
-      "hotkey": "ctrl+alt+2",
-      "reverse_hotkey": "ctrl+shift+alt+2",
-      "replacements": [
+          "replace_with": "REDACTED_API_KEY"
+        },
         {
-          "regex": "(?i)(my private email address|my personal email)",
-          "replace_with": "{{personal_email}}",
-          "preserve_case": false,
-          "reverse_with": "my personal email"
+          "regex": "{{my_password}}",
+          "replace_with": "REDACTED_PASSWORD"
         }
       ]
     }

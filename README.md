@@ -57,14 +57,14 @@ Clipboard Regex Replace is a lightweight, standalone Go application that runs in
 ## Screenshots
 
 *   **Systray Menu:**<br>
-    ![System Tray Menu Screenshot](demo/DemoSystemTray1.png)
-    ![System Tray Menu Screenshot](demo/DemoSystemTray2.png)
+    ![System Tray Menu Screenshot](demo/DemoSystemTray1.png)<br>
+    ![System Tray Menu Screenshot](demo/DemoSystemTray2.png)<br>
     ![System Tray Menu Screenshot](demo/DemoSystemTray3.png)
 *   **Diff Viewer:**<br>
     ![Diff Viewer Screenshot](demo/DemoDiff.png)
 *   **Add Simple Rule Dialog:**<br>
-    ![Add Simple Rule Screenshot 1](demo/AddSimpleRule1.png)
-    ![Add Simple Rule Screenshot 2](demo/AddSimpleRule2.png)
+    ![Add Simple Rule Screenshot 1](demo/AddSimpleRule1.png)<br>
+    ![Add Simple Rule Screenshot 2](demo/AddSimpleRule2.png)<br>
     ![Add Simple Rule Screenshot 3](demo/AddSimpleRule3.png)
 *   **Notification Example:**<br>
     ![Replacement Notification Screenshot](demo/ReplacementNotification.png)

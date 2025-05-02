@@ -1,6 +1,13 @@
 ## Changelog
 
-### 1.7.2 (Current Version)
+### 1.7.3 (Current Version)
+
+*   **Enhancement: Diff Viewer Improvements:**
+    *   Added line numbers (original and modified) to the HTML diff view for easier navigation.
+    *   Implemented context folding: Large blocks of unchanged text (more than 6 lines by default) are now collapsed into a "N lines hidden" marker to focus the view on actual modifications.
+    *   Improved overall styling of the diff view for better readability.
+
+### 1.7.2
 
 *   **Feature: Granular Notification Control:**
     *   Replaced the single `use_notifications` setting with two more specific settings in `config.json`:

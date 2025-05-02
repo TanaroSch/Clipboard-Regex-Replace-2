@@ -10,42 +10,64 @@ import (
 	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
-// GenerateDiffAndSummary creates a diff result and a basic line-based summary.
-// It returns the raw diffs array for manual rendering.
-func GenerateDiffAndSummary(original, modified string) (diffs []diffmatchpatch.Diff, summary string) { // <<< Return []Diff now
+// GenerateDiffAndSummary builds a pure line‑based diff and a short summary.
+func GenerateDiffAndSummary(original, modified string) (diffs []diffmatchpatch.Diff, summary string) {
 	dmp := diffmatchpatch.New()
 	dmp.DiffTimeout = 5 * time.Second
 
-	// --- Perform Diff Directly ---
-	diffs = dmp.DiffMain(original, modified, true) // true = check lines
+	// ------------------------------------------------------------------
+	// 1. Collapse every *physical* line into a single rune.
+	// ------------------------------------------------------------------
+	a, b, lineArray := dmp.DiffLinesToRunes(original, modified)
 
-	// Optional cleanup (can be slow)
-	// dmp.DiffCleanupSemantic(diffs)
+	// ------------------------------------------------------------------
+	// 2. Run the diff on those rune slices – checklines MUST be false
+	//    because we already chunked input by line.
+	// ------------------------------------------------------------------
+	diffs = dmp.DiffMainRunes(a, b, false)
 
-	// --- Generate Summary (remains the same) ---
-	linesOriginal := strings.Split(original, "\n")
-	linesModified := strings.Split(modified, "\n")
-	var summaryBuilder bytes.Buffer
-	opCounts := map[diffmatchpatch.Operation]int{
-		diffmatchpatch.DiffEqual:   0,
-		diffmatchpatch.DiffInsert: 0,
-		diffmatchpatch.DiffDelete: 0,
-	}
+	// ------------------------------------------------------------------
+	// 3. Expand the runes back to the original lines.
+	// ------------------------------------------------------------------
+	diffs = dmp.DiffCharsToLines(diffs, lineArray)
+
+	// Optional, but makes the output a bit cleaner (splits huge replace blocks).
+	dmp.DiffCleanupSemanticLossless(diffs)
+
+	// ------------------------------------------------------------------
+	// Build a simple human‑readable summary
+	// ------------------------------------------------------------------
+	origLines := lineCount(original)
+	modLines  := lineCount(modified)
+
+	inserted, deleted := 0, 0
 	for _, d := range diffs {
 		switch d.Type {
-		case diffmatchpatch.DiffInsert: opCounts[diffmatchpatch.DiffInsert]++
-		case diffmatchpatch.DiffDelete: opCounts[diffmatchpatch.DiffDelete]++
-		case diffmatchpatch.DiffEqual:  opCounts[diffmatchpatch.DiffEqual]++
+		case diffmatchpatch.DiffInsert:
+			inserted += lineCount(d.Text)
+		case diffmatchpatch.DiffDelete:
+			deleted  += lineCount(d.Text)
 		}
 	}
-	summaryBuilder.WriteString(fmt.Sprintf("Comparison Summary:\n"))
-	summaryBuilder.WriteString(fmt.Sprintf("- Original Lines: %d\n", len(linesOriginal)))
-	summaryBuilder.WriteString(fmt.Sprintf("- Modified Lines: %d\n", len(linesModified)))
-	summaryBuilder.WriteString(fmt.Sprintf("- Change Segments Equal: %d\n", opCounts[diffmatchpatch.DiffEqual]))
-	summaryBuilder.WriteString(fmt.Sprintf("- Change Segments Inserted: %d\n", opCounts[diffmatchpatch.DiffInsert]))
-	summaryBuilder.WriteString(fmt.Sprintf("- Change Segments Deleted: %d\n", opCounts[diffmatchpatch.DiffDelete]))
-	summary = summaryBuilder.String()
 
-	// Return the raw diffs array and the summary.
-	return diffs, summary // <<< Return diffs array
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "Comparison Summary:\n")
+	fmt.Fprintf(&buf, "- Original Lines : %d\n", origLines)
+	fmt.Fprintf(&buf, "- Modified Lines : %d\n", modLines)
+	fmt.Fprintf(&buf, "- Lines Inserted : %d\n", inserted)
+	fmt.Fprintf(&buf, "- Lines Deleted  : %d\n", deleted)
+
+	return diffs, buf.String()
+}
+
+// lineCount returns the number of *physical* lines in the snippet.
+func lineCount(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := strings.Count(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		n++ // final line has no trailing newline
+	}
+	return n
 }

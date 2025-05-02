@@ -1,3 +1,5 @@
+# Clipboard Regex Replace [![GitHub release (latest by date)](https://img.shields.io/github/v/release/TanaroSch/Clipboard-Regex-Replace-2)](https://github.com/TanaroSch/Clipboard-Regex-Replace-2/releases/latest) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **Instantly transform clipboard text using custom rules and global hotkeys.**
 
 Clipboard Regex Replace is a lightweight, standalone Go application that runs in your system tray. It monitors your keyboard for global hotkeys you define. When triggered, it automatically applies a series of predefined regex rules (including securely stored secrets) to your clipboard text, updates the clipboard, and optionally simulates a paste action. Manage rules, secrets, and profiles easily via the system tray menu.

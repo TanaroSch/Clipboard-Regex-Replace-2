@@ -1,487 +1,159 @@
-# Clipboard Regex Replace
+# Clipboard Regex Replace [![GitHub release (latest by date)](https://img.shields.io/github/v/release/TanaroSch/Clipboard-Regex-Replace-2)](https://github.com/TanaroSch/Clipboard-Regex-Replace-2/releases/latest) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Clipboard Regex Replace is a fast, standalone clipboard filtering application written in Go. It automatically applies a series of regex-based replacements to your clipboard text when you press a global hotkey, then updates your clipboard and simulates a paste action. Additionally, it provides Windows toast notifications, a system tray icon for easy management, a detailed diff view for analyzing changes, secure storage for sensitive replacement values, and tools for quickly adding common rules.
+**Instantly transform clipboard text using custom rules and global hotkeys.**
 
-> **Note:** This implementation is a major upgrade compared to the initial Python implementation in [Clipboard-Regex-Replace](https://github.com/TanaroSch/Cliboard-Regex-Replace). It's designed to be lightweight, efficient, and easy to distribute as a single executable (with only external configuration).
+Clipboard Regex Replace is a lightweight, standalone Go application that runs in your system tray. It monitors your keyboard for global hotkeys you define. When triggered, it automatically applies a series of predefined regex rules (including securely stored secrets) to your clipboard text, updates the clipboard, and optionally simulates a paste action. Manage rules, secrets, and profiles easily via the system tray menu.
 
-## Features
+---
 
-- **Global Hotkey Trigger:**
-  Press a configurable hotkey (default: `Ctrl+Alt+V`) to process the clipboard text.
+## ✨ Quick Demo
 
-- **Regex-based Filtering:**
-  Define multiple regex replacement rules in an external configuration file (`config.json`).
+![Clipboard Regex Replace Demo](demo/DemoCapture.gif)
 
-- **Secure Secret Management:**
-  Store sensitive values (like passwords or API keys) securely in your OS's native credential store (Windows Credential Manager, macOS Keychain, Linux Secret Service/Keyring) instead of plain text in `config.json`. Manage secrets directly via the system tray menu.
+---
 
-- **Secret Placeholders:**
-  Reference stored secrets within your regex replacement rules using `{{secret_name}}` syntax.
+## Key Features
 
-- **Simple Rule Addition:**
-  Quickly add basic 1:1 text replacement rules to a selected profile directly from the system tray menu using native dialogs.
+*   🚀 **Global Hotkey Trigger:** Process clipboard content instantly with configurable hotkeys (e.g., `Ctrl+Alt+V`).
+*   🔧 **Powerful Regex Rules:** Define complex text replacements using regular expressions in `config.json`.
+*   🔒 **Secure Secret Management:** Store sensitive data (API keys, emails) securely in your OS keychain/credential store, referenced via `{{secret_name}}`. ([Details...](FEATURES.md#secure-secret-management))
+*   ⚙️ **Multiple Profiles:** Organize rules into different profiles, each with its own hotkey(s). Toggle profiles on-the-fly. ([Details...](FEATURES.md#multiple-profile-support))
+*   ➕ **Easy Rule/Secret Addition:** Add simple text replacements or manage secrets directly from the system tray menu using native dialogs. ([Details...](FEATURES.md#adding-simple-rules-via-system-tray))
+*   📋 **Clipboard Automation:** Automatically updates the clipboard and simulates a paste (Ctrl+V).
+*   ↔️ **Bidirectional & Case-Preserving:** Configure rules to reverse replacements or maintain original text casing. ([Details...](FEATURES.md#case-preserving-and-reversible-replacements))
+*   👁️ **Change Diff Viewer:** See exactly what changed with a browser-based diff view after each operation.
+*   📌 **System Tray Control:** Manage profiles, secrets, rules, view diffs, revert changes, reload config, and quit – all from the systray icon.
+*   🔔 **Notifications:** Get feedback via native OS notifications (Windows Toast, libnotify, etc.).
+*   💻 **Cross-Platform:** Runs on Windows, macOS, and Linux (core functionality). Native features adapt to the OS.
+*   📦 **Standalone:** Single executable file (plus external `config.json`).
 
-- **Clipboard Automation:**
-  Automatically updates your clipboard content and simulates a paste.
+➡️ **See [FEATURES.md](FEATURES.md) for in-depth explanations of key features.**
 
-- **Multiple Profile Support:**
-  Create and manage multiple sets of replacement rules with different hotkeys.
+---
 
-- **Case-Preserving Replacements:**
-  Maintain capitalization patterns when replacing text (e.g., lowercase, UPPERCASE, Title Case, PascalCase).
+## Example Use Cases
+*   **Sanitize for LLMs & Public Pasting:** Automatically redact API keys, passwords, PII, internal server names, or other sensitive data from logs, code, or configs *before* pasting into LLMs (ChatGPT, Claude, etc.), public forums, or issue trackers.
+*   **Prepare Code Snippets:** Clean up code formatting (whitespace, indentation), remove debug statements, or standardize variable names in snippets prior to sharing or using them in LLM prompts.
+*   **Anonymize Configurations & Logs:** Quickly replace specific project names, client identifiers, or user details with generic placeholders when sharing configurations or log excerpts externally.
+*   **Streamline Repetitive Cleaning:** Automate any frequent text transformations, such as removing tracking parameters from URLs, fixing common typos, or standardizing date/time formats before pasting.
+*   **Combine Complex Edits:** Chain multiple redaction, formatting, and cleanup rules under a single hotkey press for efficient preparation of complex text for specific destinations.
+---
 
-- **Bidirectional Replacements:**
-  Configure reverse hotkeys to switch back from replaced text to original text (supports secret placeholders).
+## Quick Start
 
-- **Temporary Clipboard Storage:**
-  Optionally store the original clipboard text before processing. You can choose to automatically revert to the original clipboard content after pasting or manually revert using the system tray menu.
+1.  **Download:** Grab the latest release from the [Releases Page](https://github.com/TanaroSch/Clipboard-Regex-Replace-2/releases) (Link needs updating if it's a different repo).
+2.  **Configure:**
+    *   Place the executable in a folder.
+    *   Copy the `config.json.example` file to the same folder and rename it to `config.json`.
+    *   Edit `config.json` to define your desired hotkeys and replacement rules (see [Configuration](#configuration) below).
+3.  **Run:** Double-click the executable (or run from terminal). A system tray icon should appear.
+4.  **(Optional) Add Secrets:** Right-click the systray icon -> Manage Secrets -> Add/Update Secret... (Requires app restart after adding/removing secrets).
+5.  **(Optional) Add Simple Rules:** Right-click the systray icon -> Add Simple Rule... (Requires Config Reload).
+6.  **(Optional) Autostart on Startup:** Don't create a shortcut to the .exe itself, create a shortcut of the ```CliboardRegexReplace.bat``` and place it in the startup folder instead.
+7.  **Use:** Copy text, press your configured hotkey, and paste!
 
-- **Global Revert Hotkey:**
-  Configure a dedicated hotkey to quickly revert to the original clipboard content when automatic reversion is disabled.
+---
 
-- **Dynamic Configuration Reloading:**
-  Reload configuration changes *except* for newly added/removed secrets without restarting the application using the system tray menu. (**Note:** Activating new secrets requires a manual application restart.)
+## Screenshots
 
-- **Open Configuration File:**
-  Quickly open your `config.json` file in the default text editor directly from the system tray menu.
+*   **Systray Menu:**<br>
+    ![System Tray Menu Screenshot](demo/DemoSystemTray1.png)
+    ![System Tray Menu Screenshot](demo/DemoSystemTray2.png)
+    ![System Tray Menu Screenshot](demo/DemoSystemTray3.png)
+*   **Diff Viewer:**<br>
+    ![Diff Viewer Screenshot](demo/DemoDiff.png)
+*   **Add Simple Rule Dialog:**<br>
+    ![Add Simple Rule Screenshot 1](demo/AddSimpleRule1.png)
+    ![Add Simple Rule Screenshot 2](demo/AddSimpleRule2.png)
+    ![Add Simple Rule Screenshot 3](demo/AddSimpleRule3.png)
+*   **Notification Example:**<br>
+    ![Replacement Notification Screenshot](demo/ReplacementNotification.png)
 
-- **Windows Toast Notifications:**
-  Displays a toast notification to show successful replacement and configuration changes. The notification now prompts to view changes via the systray.
-
-- **System Tray Icon:**
-  Runs in the background with a system tray icon and provides a menu for quick actions like managing secrets, adding simple rules, opening the configuration file, reloading configuration, viewing last changes, reverting clipboard, and exiting the application.
-
-- **Change Details Viewer:**
-  After a replacement occurs, view a detailed HTML report showing a summary of changes and a line-by-line diff of the original versus modified text, opened in your default web browser.
-
-- **Standalone Executable:**
-  Easily build and distribute a single EXE file on Windows (with external configuration files).
-
-## Requirements
-
-- [Go 1.16+](https://golang.org/dl/)
-- A Windows, macOS, or Linux machine with a supported native credential store for the Secure Secret Management feature.
-  - Windows: Credential Manager
-  - macOS: Keychain Access
-  - Linux: GNOME Keyring, KWallet, or other service implementing the Secret Service API.
-- For building: A suitable build environment for your target OS.
-
-## Project Structure
-
-The project now follows a modern Go project structure:
-
-```
-clipboard-regex-replace/
-├── cmd/
-│   └── clipregex/          # Main entry point
-├── internal/               # Internal packages
-│   ├── app/                # Application core
-│   ├── clipboard/          # Clipboard handling
-│   ├── config/             # Configuration
-│   ├── diffutil/           # Diff generation utilities
-│   ├── hotkey/             # Hotkey management
-│   ├── resources/          # Embedded resources
-│   └── ui/                 # User interface
-├── dist/                   # Distribution builds
-├── assets/                 # External assets
-├── go.mod
-├── go.sum
-├── config.json.example
-├── icon.png                # External icon for notifications
-└── README.md
-```
-
-## Installation
-
-1.  **Clone the Repository:**
-
-    ```bash
-    git clone https://github.com/TanaroSch/Clipboard-Regex-Replace-2.git
-    cd Clipboard-Regex-Replace-2
-    ```
-
-2.  **Download Dependencies:**
-
-    The repository uses Go modules. The required dependencies will be fetched automatically when you build or run the project.
-
-    ```bash
-    go mod tidy
-    ```
+---
 
 ## Configuration
 
-The application reads its configuration from an external `config.json` file located in the same directory as the executable.
+The application uses a `config.json` file in the same directory as the executable to define global settings, secrets, and rule profiles.
 
-The configuration supports global settings, multiple profiles, and secure secret management.
+➡️ **See [CONFIGURATION.md](CONFIGURATION.md) for detailed structure and examples.**
 
-### Example `config.json` Structure:
-
-```json
-{
-  "use_notifications": true,
-  "temporary_clipboard": true,
-  "automatic_reversion": false,
-  "revert_hotkey": "ctrl+shift+alt+r",
-  "secrets": {
-    "my_api_key": "managed",
-    "personal_email": "managed"
-  },
-  "profiles": [
-    {
-      "name": "General Cleanup",
-      "enabled": true,
-      "hotkey": "ctrl+alt+v",
-      "replacements": [
-        {
-          "regex": "\\s+",
-          "replace_with": " "
-        }
-      ]
-    },
-    {
-      "name": "API Key Redaction",
-      "enabled": true,
-      "hotkey": "ctrl+alt+1",
-      "replacements": [
-        {
-          "regex": "{{my_api_key}}",
-          "replace_with": "[REDACTED_API_KEY]"
-        }
-      ]
-    },
-    {
-      "name": "Email Obfuscation",
-      "enabled": true,
-      "hotkey": "ctrl+alt+2",
-      "reverse_hotkey": "ctrl+shift+alt+2",
-      "replacements": [
-        {
-          "regex": "(?i)(my private email address|my personal email)",
-          "replace_with": "{{personal_email}}",
-          "preserve_case": false,
-          "reverse_with": "my personal email"
-        }
-      ]
-    }
-  ]
-}
-```
-
-> **Important Warning:** Replacements are processed sequentially in the order they appear within a profile. This means the order of your regex rules matters! Earlier replacements can affect the text that later replacements operate on. Consider this carefully when organizing your replacement rules to avoid unexpected results.
-
-## Secure Secret Management
-
-To avoid storing sensitive data (like passwords, API keys, emails) directly in `config.json`, you can use the secure secret management feature.
-
-### How it Works
-
-1.  **Storage:** Secrets are stored securely in your operating system's native credential store (e.g., Windows Credential Manager, macOS Keychain, Linux Secret Service/Keyring) under the service name `LLMClipboardFilter2`.
-2.  **Configuration:** In `config.json`, you define a logical name for each secret in the top-level `secrets` map. The value should always be `"managed"`.
-    ```json
-    "secrets": {
-      "my_api_key": "managed",
-      "ssh_password": "managed"
-    }
-    ```
-3.  **Usage in Rules:** Reference your secrets within the `regex` or `replace_with` (or `reverse_with`) fields of your replacement rules using double curly braces: `{{logical_name}}`.
-    ```json
-    {
-      "regex": "{{ssh_password}}",        // Use secret as the text to find
-      "replace_with": "[SSH_PASSWORD]"
-    },
-    {
-      "regex": "My Contact Email",
-      "replace_with": "{{personal_email}}" // Use secret as the replacement text
-    }
-    ```
-4.  **Management:** Add, list, and remove secrets using the "Manage Secrets" submenu in the system tray. This will interact with your OS credential store.
-5.  **Activation:** **A full manual restart of the application is required after adding or removing secrets** for the changes to take effect in replacement rules. Reloading configuration is *not* sufficient for activating new secrets.
-
-### Managing Secrets via System Tray
-
--   **Add/Update Secret...**: Prompts you for a "Logical Name" (which you'll use in `{{...}}` placeholders) and the actual "Secret Value". The value is stored securely in the OS keychain/credential store, and the logical name is added to the `secrets` map in `config.json`. It can optionally create a basic replacement rule for the new secret.
--   **List Secret Names**: Shows a notification and logs the logical names of all secrets currently managed by the application (reads from the `secrets` map in `config.json`). It does *not* display the secret values.
--   **Remove Secret...**: Prompts you to select one of the managed logical names. Upon confirmation, it removes the secret from the OS keychain/credential store and removes its entry from the `secrets` map in `config.json`. **This action cannot be undone.**
-
-## Adding Simple Rules via System Tray
-
-For common cases where you want to replace one specific piece of text with another, you can use the "Add Simple Rule..." option in the system tray menu.
-
-### How it Works
-
-1.  **Select Profile:** You'll first be asked to choose which existing profile you want to add the rule to.
-2.  **Enter Source Text:** Provide the exact text you want to find and replace. Any special characters you enter here will be treated literally (they won't act as regex commands).
-3.  **Enter Replacement Text:** Provide the text you want to replace the source text with. This can be empty if you want to delete the source text.
-4.  **Case Sensitivity:** You'll be asked (Yes/No) if the rule should be case-insensitive.
-    *   **Yes:** The rule will match the source text regardless of whether it's uppercase or lowercase (e.g., "source" would match "source", "Source", "SOURCE", etc.). This adds `(?i)` to the beginning of the generated regex.
-    *   **No:** The rule will only match the source text with the exact casing you entered.
-5.  **Rule Added:** The application constructs the appropriate regex rule (e.g., `(?i)My literal text` or `My literal text`) and adds it to the end of the selected profile's `replacements` list in your `config.json` file. The `preserve_case` option is automatically set to `false` for these simple rules.
-6.  **Reload Config:** After adding a rule, you should use the "Reload Configuration" menu item (or restart the application) for the new rule to become active.
-
-This provides a quick way to add basic replacements without manually editing the `config.json` file and escaping regex characters. For more complex patterns, you'll still need to edit the configuration file directly.
-
-## Multiple Profile Support
-
-Clipboard Regex Replace supports multiple configuration profiles. Each profile can have its own set of replacement patterns and hotkey bindings.
-
-### Features
-
-- **Independent Profiles**: Create multiple distinct sets of replacement rules
-- **Per-Profile Hotkeys**: Assign different hotkeys to different profiles
-- **Dynamic Profile Toggling**: Enable or disable profiles via the system tray
-- **Rule Merging**: Profiles with the same hotkey will have their rules merged during execution
-- **Backward Compatibility**: Existing config.json files are automatically migrated
-
-### How to Configure Multiple Profiles
-
-Edit your `config.json` file to use the format shown in the [Configuration](#configuration) section, defining profiles within the `profiles` array.
-
-### Profile Options
-
-- **name**: A descriptive name for the profile (displayed in the system tray)
-- **enabled**: Whether the profile is active (can be toggled in the tray)
-- **hotkey**: The hotkey combination that triggers this profile
-- **reverse_hotkey**: Optional hotkey for reverse replacements (bidirectional mode)
-- **replacements**: An array of regex replacement rules for this profile, potentially using `{{secret_name}}` placeholders.
-
-### Using Profiles
-
-1.  **Triggering Specific Profiles**: Press the hotkey assigned to a profile to execute its replacements.
-2.  **Toggling Profiles**: Enable or disable profiles via the "Profiles" submenu in the system tray.
-3.  **Adding New Profiles**: Click "➕ Add New Profile" in the system tray, then edit the `config.json` file to customize it.
-4.  **Shared Hotkeys**: Multiple enabled profiles can share the same hotkey. When that hotkey is pressed, all the replacement rules from those profiles will be applied in sequence.
-5.  **Bidirectional Replacements**: Set up a `reverse_hotkey` to enable going from replaced text back to original text.
-6.  **Restarting the Application**: Use the "Restart Application" option in the system tray if you experience menu duplication issues after config changes.
-
-### Migration from Previous Versions
-
-When you upgrade from a version before v1.4.0, your existing configuration will be automatically migrated to the new format. Your existing replacement rules will be placed in a "Default" profile that retains your original hotkey configuration.
-
-## Case-Preserving and Reversible Replacements
-
-Clipboard Regex Replace supports case-preserving and bidirectional replacements. Secret placeholders work with these features.
-
-### Case Preservation
-
-With case preservation, the application maintains the capitalization pattern when replacing text:
-
-```json
-{
-  "regex": "(?i)(JohnDoe)",
-  "replace_with": "GithubUser",
-  "preserve_case": true
-}
-```
-
-This will maintain the case pattern:
-
-- `johndoe` → `githubuser` (lowercase preserved)
-- `JOHNDOE` → `GITHUBUSER` (UPPERCASE preserved)
-- `JohnDoe` → `GithubUser` (PascalCase preserved)
-- `Johndoe` → `Githubuser` (First letter capitalized preserved)
-
-### Bidirectional Replacements
-
-You can add a `reverse_hotkey` to profiles to enable bidirectional replacements:
-
-```json
-{
-  "name": "Privacy - Bidirectional",
-  "enabled": true,
-  "hotkey": "ctrl+alt+v",
-  "reverse_hotkey": "shift+alt+v",
-  "replacements": [
-    {
-      "regex": "(?i)({{real_name_alt1}}|{{real_name_alt2}}|John)", // Can mix secrets and text
-      "replace_with": "{{github_user}}",
-      "preserve_case": true
-    }
-  ]
-}
-```
-Assuming `{{real_name_alt1}}` resolves to `JohnDoe_T`, `{{real_name_alt2}}` to `JohnDoe`, and `{{github_user}}` to `GithubUser`:
-- Pressing `ctrl+alt+v` performs normal replacements (`JohnDoe` → `GithubUser`)
-- Pressing `shift+alt+v` performs reverse replacements (`GithubUser` → `JohnDoe_T`, using the first resolved pattern by default).
-
-### Custom Reverse Replacements
-
-Override the default reverse text using the `reverse_with` field. Placeholders are supported here too.
-
-```json
-{
-  "regex": "(?i)({{real_name_alt1}}|{{real_name_alt2}}|John)",
-  "replace_with": "{{github_user}}",
-  "preserve_case": true,
-  "reverse_with": "{{real_name_alt2}}" // Reverse to the resolved value of real_name_alt2
-}
-```
-Now, `shift+alt+v` would reverse `GithubUser` to `JohnDoe`.
+---
 
 ## Usage
 
 1.  **Running the Application:**
-    - **Development:** `go run cmd/clipregex/main.go`
-    - **Production:** Double-click the compiled `.exe` (or run it from terminal/startup).
+    *   **From Release:** Double-click the downloaded executable (e.g., `.exe` on Windows).
+    *   **From Source (Dev):** Run `go run cmd/clipregex/main.go` in your terminal.
+    *   The application runs in the background. Look for its icon in your system tray.
 
 2.  **Managing Secrets (First Time / Updates):**
-    - Right-click the system tray icon.
-    - Select **Manage Secrets** -> **Add/Update Secret...**.
-    - Follow the prompts to enter a logical name and the secret value.
-    - Optionally create a basic replacement rule.
-    - **Important:** **Manually restart the application** for the new secret to be usable in replacements.
+    *   Right-click the system tray icon.
+    *   Select **Manage Secrets** -> **Add/Update Secret...**.
+    *   Follow the native dialog prompts to enter a logical name (e.g., `my_email`) and the actual secret value.
+    *   Optionally let the app create a basic replacement rule for you.
+    *   **Important:** **Manually restart the application** (Systray Menu -> Restart Application) for the new secret to be usable in your `{{...}}` placeholders.
 
-3.  **Adding a Simple Rule:** (New in v1.7.1)
-    - Right-click the system tray icon.
-    - Select **Add Simple Rule...**.
-    - Follow the prompts to select a profile, enter source text, replacement text, and choose case sensitivity.
-    - Use **Reload Configuration** from the system tray menu to activate the new rule without restarting.
+3.  **Adding a Simple Rule:** (Introduced in v1.7.1)
+    *   Right-click the system tray icon.
+    *   Select **Add Simple Rule...**.
+    *   Follow the native dialog prompts to select a profile, enter the exact source text to find, the replacement text, and choose case sensitivity (Yes/No).
+    *   After the rule is added to `config.json`, use **Reload Configuration** from the system tray menu to activate it without restarting the app.
 
 4.  **Triggering Clipboard Processing:**
-    - Copy some text.
-    - Press a configured hotkey (e.g., `Ctrl+Alt+V`).
-    - The application reads the clipboard, resolves any `{{...}}` placeholders using secrets from the OS keychain, applies matching regex rules, updates the clipboard, simulates paste, and shows notifications.
+    *   Copy some text to your clipboard.
+    *   Press a hotkey configured in your `config.json` (e.g., `Ctrl+Alt+V` for the default profile).
+    *   The application performs these steps automatically:
+        1.  Reads current clipboard text.
+        2.  Resolves any `{{secret_name}}` placeholders using secrets from the OS keychain.
+        3.  Applies matching regex rules from enabled profiles associated with that hotkey.
+        4.  Updates the clipboard with the transformed text.
+        5.  Simulates a paste action (like pressing Ctrl+V).
+        6.  Shows a notification (if enabled).
 
 5.  **Viewing Changes:**
-    - Right-click the system tray icon after a replacement.
-    - Select **View Last Change Details**. Opens a diff report in your browser.
+    *   Immediately after a transformation occurs via hotkey:
+    *   Right-click the system tray icon.
+    *   Select **View Last Change Details**. This opens a detailed HTML diff report in your default web browser, highlighting the changes made.
 
 6.  **Using Reverse Replacements (if configured):**
-    - Copy text containing previously replaced content.
-    - Press the configured reverse hotkey.
-    - The application resolves secrets needed for the reverse mapping and applies the rules.
+    *   Copy text that contains content previously replaced by a profile with a `reverse_hotkey`.
+    *   Press the configured `reverse_hotkey` for that profile.
+    *   The application attempts to reverse the transformation based on the rules defined (using `reverse_with` if specified, or deriving from the `regex`).
 
 7.  **Reverting to Original Clipboard:**
-    - Use the global revert hotkey (if configured) or the **Revert to Original** systray menu item (if temporary clipboard is enabled).
+    *   If `temporary_clipboard` is enabled in `config.json` and `automatic_reversion` is disabled:
+    *   Either press the global `revert_hotkey` (if defined in `config.json`).
+    *   Or right-click the systray icon and select **Revert to Original**.
+    *   This restores the clipboard content to what it was *before* the last hotkey-triggered transformation.
 
 8.  **Editing Configuration:**
-    - Right-click the systray icon -> **Open Config File**.
+    *   Right-click the systray icon -> **Open Config File**. This opens `config.json` in your system's default text editor.
 
 9.  **Reloading Configuration:**
-    - Right-click the systray icon -> **Reload Configuration**. Applies changes from `config.json` (like modified rules, profile toggles) **except** for newly added or removed secrets.
+    *   Right-click the systray icon -> **Reload Configuration**.
+    *   Applies changes saved in `config.json` (like modified rules, profile enable/disable toggles, global settings) **without** restarting the application.
+    *   **Note:** This does *not* load newly added secrets or register hotkeys for newly added profiles/rules. Use "Restart Application" for those changes.
 
 10. **Restarting Application:**
-    - Right-click the systray icon -> **Restart Application**. Recommended after making significant profile changes.
+    *   Right-click the systray icon -> **Restart Application**.
+    *   Recommended after using "Manage Secrets" or making significant changes to profiles/hotkeys in `config.json`.
 
 11. **Exiting the Application:**
-    - Right-click the systray icon -> **Quit**.
+    *   Right-click the systray icon -> **Quit**.
 
-## Building for Windows
+---
 
-To build a Windows executable without a console window:
+## Contributing & Building
 
-```bash
-go build -ldflags="-H=windowsgui" -o dist/ClipboardRegexReplace.exe cmd/clipregex/main.go
-```
+Information about requirements, building from source, project structure, and dependencies can be found in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-For distribution, include the following files:
-
-- `ClipboardRegexReplace.exe`
-- `config.json.example` (rename to `config.json`)
-- `icon.png` (optional, for higher quality notifications)
-
-## Dependencies
-
-- [github.com/99designs/keyring](https://github.com/99designs/keyring) - Secure secret storage using OS credential manager.
-- [github.com/atotto/clipboard](https://github.com/atotto/clipboard) – Clipboard access.
-- [github.com/gen2brain/beeep](https://github.com/gen2brain/beeep) – Fallback notification library.
-- [github.com/getlantern/systray](https://github.com/getlantern/systray) – System tray icon.
-- [github.com/go-toast/toast](https://github.com/go-toast/toast) – Windows toast notifications.
-- [github.com/ncruces/zenity](https://github.com/ncruces/zenity) - Cross-platform native dialogs for secret management.
-- [github.com/sergi/go-diff/diffmatchpatch](https://github.com/sergi/go-diff) – Text differencing library.
-- [golang.design/x/hotkey](https://pkg.go.dev/golang.design/x/hotkey) – Global hotkey registration.
-
+---
 
 ## Changelog
 
-### 1.7.1 (Current Version)
+See [CHANGELOG.md](CHANGELOG.md) for the detailed version history.
 
--   **Feature: Add Simple Rule:**
-    -   Added "Add Simple Rule..." option to the system tray menu.
-    -   Uses native dialogs (`zenity`) to prompt for profile selection, source text, replacement text, and case sensitivity.
-    -   Automatically creates a 1:1 replacement rule (escaping source text for regex) in the selected profile and saves `config.json`.
-
-### 1.7.0
-
--   **Feature: Secure Secret Management:**
-    -   Store sensitive replacement values securely in the OS native credential store (keychain/credential manager).
-    -   Added "Manage Secrets" submenu to system tray for adding, listing, and removing secrets via native dialogs (`zenity`).
-    -   Introduced `secrets` map in `config.json` to declare managed secrets.
-    -   Use `{{secret_name}}` placeholders in `regex`, `replace_with`, and `reverse_with` fields.
-    -   **Note:** Requires manual application restart after adding/removing secrets.
--   **Dependency:** Added `github.com/99designs/keyring` and `github.com/ncruces/zenity`.
--   **Config:** Changed default file permissions for `config.json` to `0600` (owner read/write only). Added default config creation on first run if missing.
-
-### 1.5.4
-
--   **Feature: Change Details Viewer:** Added a "View Last Change Details" option to the system tray menu. When clicked after a replacement, it opens an HTML report in the browser showing a summary and detailed diff of the changes.
--   **Refactor:** Improved diff generation logic for better accuracy and readability in HTML output.
--   **Fix:** Resolved issues with opening configuration file and diff report on Windows by using the ShellExecuteW API directly within the UI package.
--   **Refactor:** Moved platform-specific code (paste simulation, file opening) to dedicated files within relevant packages (`clipboard`, `ui`) using build tags.
-
-### 1.5.3
-
--   **Open Configuration File:**
-    - Add option in system tray to quickly open ```config.json``` in the default text editor
-
-### 1.5.2
-
--   **Major Code Refactoring**:
-    - Reorganized project into a proper Go package structure
-    - Improved platform-specific clipboard paste handling
-    - Enhanced error handling and logging
-    - Better separation of concerns between packages
-    - No functional changes, purely architectural improvements
-
-### 1.5.1
-
--   **Global Revert Hotkey:**
-    Added support for a dedicated global hotkey that reverts the clipboard to its original content when automatic reversion is disabled.
-
-### 1.5.0
-
--   **Case-Preserving Replacements:**
-    Added support for maintaining capitalization patterns when replacing text (lowercase, UPPERCASE, Title Case, PascalCase).
--   **Bidirectional Replacements:**
-    Added `reverse_hotkey` to profiles for enabling reversible replacements.
--   **Custom Reverse Replacements:**
-    Added `reverse_with` field to override the default text used in reverse replacements.
-
-### 1.4.0
-
--   **Multiple Profile Support:**
-    Added support for multiple named profiles, each with its own set of replacement rules and hotkey binding.
--   **Profile Management:**
-    Profiles can be toggled on/off directly from the system tray.
--   **Rule Merging:**
-    Profiles with the same hotkey have their replacement rules merged and applied sequentially.
-
-### 1.3.1
-
--   **Fixed Original Clipboard Storage:**
-    Fixed an issue where pressing the hotkey multiple times on already processed text would incorrectly overwrite the stored original clipboard content. The application now properly preserves the original clipboard text until either new content is copied or new replacements are performed.
-
-### 1.3.0
-
--   **Dynamic Configuration Reloading:**
-    Added ability to reload configuration without restarting the application.
--   **Automatic Clipboard Reversion:**
-    Added option to automatically restore the original clipboard content immediately after pasting.
--   **Simplified Clipboard Management:**
-    Streamlined the clipboard restoration interface to a single "Revert to Original" option in the system tray.
-
-### 1.2.0
--   **Temporary Clipboard Storage:**
-    Optionally store the original clipboard text before applying regex replacements. The replaced clipboard is pasted, and the original text is automatically restored after 10 seconds unless the user chooses to keep the replaced text.
--   **Interactive Options:**
-    Added system tray menu items (and toast notification prompts on Windows) to allow users to revert to the original clipboard text or keep the replaced text.
-
-### 1.1.0
--   Custom hotkey configuration.
-
-### 1.0.0
--   Initial project.
--   Basic regex replacement.
--   Toast notification.
+---
 
 ## License
 

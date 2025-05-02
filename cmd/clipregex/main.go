@@ -8,7 +8,8 @@ import (
 
 	"github.com/TanaroSch/clipboard-regex-replace/internal/app"
 	"github.com/TanaroSch/clipboard-regex-replace/internal/config"
-	"github.com/TanaroSch/clipboard-regex-replace/internal/ui" // Needed for potential panic notification
+	"github.com/TanaroSch/clipboard-regex-replace/internal/ui"
+	"github.com/TanaroSch/clipboard-regex-replace/internal/resources"
 )
 
 const version = "v1.7.2" // <<< BUMP VERSION for notification changes
@@ -47,7 +48,11 @@ func main() {
 
 	// Initialize Notifications fully AFTER config is loaded successfully
 	// Retrieve icon data (error handled within New)
-	appIcon, _ := ui.GetAppIcon() // Assuming GetAppIcon exists or is added to ui
+	appIcon, iconErr := resources.GetIcon() // Call the function from resources package
+	if iconErr != nil {
+		log.Printf("Warning: Failed to load application icon: %v", iconErr)
+		// appIcon will be nil or empty, InitGlobalNotifications should handle this
+	}
 	ui.InitGlobalNotifications(cfg, config.DefaultKeyringService, appIcon)
 
 	// Create and run the application

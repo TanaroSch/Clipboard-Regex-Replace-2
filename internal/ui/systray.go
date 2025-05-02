@@ -506,12 +506,3 @@ func RestartApplication() {
 	systray.Quit() // Use systray.Quit() to try and trigger onExit cleanly
 	os.Exit(0)     // Fallback exit
 }
-
-// GetAppIcon retrieves the embedded icon data.
-// Consider moving resource loading logic here or making it globally accessible if needed elsewhere in ui.
-func GetAppIcon() ([]byte, error) {
-	// This is a placeholder implementation. You should use your existing resource loading.
-	// Example using the pattern from internal/resources:
-	// return resources.GetIcon()
-	return nil, fmt.Errorf("icon loading not implemented in ui.GetAppIcon")
-}

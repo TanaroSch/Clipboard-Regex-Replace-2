@@ -42,7 +42,7 @@ func New(cfg *config.Config, version string) *Application {
 		log.Printf("Warning: Failed to load embedded icon: %v", err)
 	}
 
-	ui.InitGlobalNotifications(cfg.UseNotifications, config.DefaultKeyringService, app.iconData) // Use AppName for consistency
+	// ui.InitGlobalNotifications is now called in main.go AFTER config load succeeds.
 
 	// Pass config reference and resolved secrets map to clipboard manager
 	app.clipboardManager = clipboard.NewManager(cfg, cfg.GetResolvedSecrets(), app.onRevertStatusChange)
@@ -73,9 +73,9 @@ func New(cfg *config.Config, version string) *Application {
 // Run starts the application
 func (a *Application) Run() {
 	if err := a.hotkeyManager.RegisterAll(); err != nil {
+		errMsg := fmt.Sprintf("Some hotkeys could not be registered: %v", err)
 		log.Printf("Warning: Failed to register some hotkeys: %v", err)
-		ui.ShowNotification("Hotkey Registration Issue",
-			fmt.Sprintf("Some hotkeys could not be registered: %v", err))
+		ui.ShowAdminNotification(ui.LevelWarn, "Hotkey Registration Issue", errMsg) // <<< CHANGED
 	}
 	// Start the systray manager (blocking call)
 	a.systrayManager.Run()
@@ -86,7 +86,8 @@ func (a *Application) onHotkeyTriggered(hotkeyStr string, isReverse bool) {
 	// clipboardManager uses its internal config reference and resolved secrets
 	message, changedForDiff := a.clipboardManager.ProcessClipboard(hotkeyStr, isReverse)
 	if message != "" {
-		ui.ShowNotification("Clipboard Updated", message)
+		// This is the specific replacement notification
+		ui.ShowReplacementNotification("Clipboard Updated", message) // <<< CHANGED
 	}
 	if a.systrayManager != nil {
 		a.systrayManager.UpdateViewLastDiffStatus(changedForDiff)
@@ -98,7 +99,7 @@ func (a *Application) onViewLastDiffTriggered() {
 	original, modified, ok := a.clipboardManager.GetLastDiff()
 	if !ok {
 		log.Println("View Last Change Details clicked, but no diff data available.")
-		ui.ShowNotification("View Changes", "No changes recorded from the last operation.")
+		ui.ShowAdminNotification(ui.LevelInfo, "View Changes", "No changes recorded from the last operation.") // <<< CHANGED
 		if a.systrayManager != nil {
 			a.systrayManager.UpdateViewLastDiffStatus(false)
 		}
@@ -111,7 +112,8 @@ func (a *Application) onViewLastDiffTriggered() {
 // onRevertHotkey is called when the revert hotkey is pressed
 func (a *Application) onRevertHotkey() {
 	if a.clipboardManager.RestoreOriginalClipboard() {
-		ui.ShowNotification("Clipboard Reverted", "Original clipboard content has been restored.")
+		// Consider if this is Admin or Replacement context. Let's say Admin Info.
+		ui.ShowAdminNotification(ui.LevelInfo, "Clipboard Reverted", "Original clipboard content has been restored.") // <<< CHANGED
 		if a.systrayManager != nil {
 			// Also clear the diff state in the UI when reverting
 			a.systrayManager.UpdateViewLastDiffStatus(false)
@@ -155,17 +157,18 @@ func (a *Application) onReloadConfig() {
 		configPath = "config.json"
 		log.Printf("Current config path is empty, attempting reload from default '%s'.", configPath)
 		if _, errStat := os.Stat(configPath); os.IsNotExist(errStat) {
-			log.Printf("Cannot reload config: Default config file '%s' does not exist.", configPath)
-			ui.ShowNotification("Configuration Error", fmt.Sprintf("Config file '%s' not found.", configPath))
+			errMsg := fmt.Sprintf("Config file '%s' not found.", configPath)
+			log.Printf("Cannot reload config: %s", errMsg)
+			ui.ShowAdminNotification(ui.LevelError, "Configuration Error", errMsg) // <<< CHANGED (Error level)
 			return
 		}
 	}
 
 	newConfig, err := config.Load(configPath)
 	if err != nil {
+		errMsg := fmt.Sprintf("Failed to reload configuration. Check %s and keychain access. Error: %v", configPath, err)
 		log.Printf("Error reloading configuration from '%s': %v", configPath, err)
-		ui.ShowNotification("Configuration Error",
-			fmt.Sprintf("Failed to reload configuration. Check %s and keychain access.", configPath))
+		ui.ShowAdminNotification(ui.LevelError, "Configuration Error", errMsg) // <<< CHANGED (Error level)
 		return
 	}
 
@@ -215,9 +218,9 @@ func (a *Application) onReloadConfig() {
 	// Re-register hotkeys based on the new config
 	a.hotkeyManager = hotkey.NewManager(a.config, a.onHotkeyTriggered, a.onRevertHotkey)
 	if err := a.hotkeyManager.RegisterAll(); err != nil {
+		errMsg := fmt.Sprintf("Some hotkeys could not be registered after reload: %v", err)
 		log.Printf("Warning: Failed to register some hotkeys after reload: %v", err)
-		ui.ShowNotification("Hotkey Registration Issue",
-			fmt.Sprintf("Some hotkeys could not be registered after reload: %v", err))
+		ui.ShowAdminNotification(ui.LevelWarn, "Hotkey Registration Issue", errMsg) // <<< CHANGED (Warn level)
 	} else {
 		log.Println("Hotkeys re-registered successfully after config reload.")
 	}
@@ -225,8 +228,7 @@ func (a *Application) onReloadConfig() {
 	// Update clipboard manager with new secrets and config reference
 	if a.clipboardManager != nil {
 		a.clipboardManager.UpdateResolvedSecrets(a.config.GetResolvedSecrets())
-		// Update config reference within clipboard manager (assuming it has one)
-		// a.clipboardManager.UpdateConfig(a.config) // Example if such method exists
+		a.clipboardManager.UpdateConfig(a.config) // Assuming clipboard manager has UpdateConfig
 	} else {
 		// Should not happen normally, but handle defensively
 		a.clipboardManager = clipboard.NewManager(a.config, a.config.GetResolvedSecrets(), a.onRevertStatusChange)
@@ -236,16 +238,16 @@ func (a *Application) onReloadConfig() {
 	if a.systrayManager != nil {
 		a.systrayManager.UpdateConfig(a.config) // Update systray internal config ref
 		if profileStructureChanged {
+			msg := "Profile structure changed. Please use 'Restart Application' via menu to fully refresh UI."
 			log.Println("Profile structure changed significantly. Restarting application is recommended for full menu update.")
-			ui.ShowNotification("Configuration Reloaded",
-				"Profile structure changed. Please use 'Restart Application' via menu to fully refresh UI.")
+			ui.ShowAdminNotification(ui.LevelWarn, "Configuration Reloaded", msg) // <<< CHANGED (Warn level)
 		} else {
-			ui.ShowNotification("Configuration Reloaded",
-				"Configuration and secrets updated successfully. Hotkeys have been refreshed.")
+			msg := "Configuration and secrets updated successfully. Hotkeys have been refreshed."
+			ui.ShowAdminNotification(ui.LevelInfo, "Configuration Reloaded", msg) // <<< CHANGED (Info level)
 		}
 	} else {
 		// Should not happen if app initialization is correct
-		ui.ShowNotification("Configuration Reloaded", "Configuration and secrets updated successfully.")
+		ui.ShowAdminNotification(ui.LevelInfo, "Configuration Reloaded", "Configuration and secrets updated successfully.") // <<< CHANGED (Info level)
 	}
 }
 
@@ -284,12 +286,14 @@ func (a *Application) onOpenConfigFile() {
 	}
 
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
-		log.Printf("Error: Config file does not exist at path: %s", absPath)
-		ui.ShowNotification("Error Opening File", fmt.Sprintf("Config file not found: %s", absPath))
+		errMsg := fmt.Sprintf("Config file not found: %s", absPath)
+		log.Printf("Error: %s", errMsg)
+		ui.ShowAdminNotification(ui.LevelWarn, "Error Opening File", errMsg) // <<< CHANGED (Warn level)
 		return
 	} else if err != nil {
+		errMsg := fmt.Sprintf("Error checking config file '%s': %v", absPath, err)
 		log.Printf("Error checking config file status at path '%s': %v", absPath, err)
-		ui.ShowNotification("Error Opening File", fmt.Sprintf("Error checking config file '%s': %v", absPath, err))
+		ui.ShowAdminNotification(ui.LevelWarn, "Error Opening File", errMsg) // <<< CHANGED (Warn level)
 		return
 	} else {
 		log.Printf("Config file exists at: %s", absPath)
@@ -298,8 +302,9 @@ func (a *Application) onOpenConfigFile() {
 	log.Printf("Attempting to open config file using ui.OpenFileInDefaultApp with path: %s", absPath)
 	err = ui.OpenFileInDefaultApp(absPath)
 	if err != nil {
+		errMsg := fmt.Sprintf("Could not open config file '%s': %v", absPath, err)
 		log.Printf("Final error after trying open methods for config file '%s': %v", absPath, err)
-		ui.ShowNotification("Error Opening File", fmt.Sprintf("Could not open config file '%s': %v", absPath, err))
+		ui.ShowAdminNotification(ui.LevelWarn, "Error Opening File", errMsg) // <<< CHANGED (Warn level)
 	}
 }
 
@@ -317,17 +322,18 @@ func (a *Application) onAddSecret() {
 	if err != nil {
 		if errors.Is(err, zenity.ErrCanceled) {
 			log.Println("Add/Update Secret canceled by user (name entry).")
-			ui.ShowNotification("Operation Canceled", "Add/Update Secret canceled.")
+			ui.ShowAdminNotification(ui.LevelInfo, "Operation Canceled", "Add/Update Secret canceled.") // <<< CHANGED (Info level)
 		} else {
 			log.Printf("Error getting logical name via zenity: %v", err)
-			ui.ShowNotification("Input Error", "Failed to get logical name input.")
+			ui.ShowAdminNotification(ui.LevelWarn, "Input Error", "Failed to get logical name input.") // <<< CHANGED (Warn level)
 		}
 		return
 	}
 	name = strings.TrimSpace(name)
 	if name == "" || strings.ContainsAny(name, " {}[]()<>|=+*?^$\\./") {
+		errMsg := fmt.Sprintf("Invalid logical name (empty or contains spaces/special chars): '%s'. Aborted.", name)
 		log.Printf("Invalid logical name entered: '%s'", name)
-		ui.ShowNotification("Invalid Input", "Invalid logical name (empty or contains spaces/special chars). Aborted.")
+		ui.ShowAdminNotification(ui.LevelWarn, "Invalid Input", errMsg) // <<< CHANGED (Warn level)
 		return
 	}
 
@@ -339,29 +345,30 @@ func (a *Application) onAddSecret() {
 	if err != nil {
 		if errors.Is(err, zenity.ErrCanceled) {
 			log.Printf("Add/Update Secret canceled by user (value entry for '%s').", name)
-			ui.ShowNotification("Operation Canceled", "Add/Update Secret canceled.")
+			ui.ShowAdminNotification(ui.LevelInfo, "Operation Canceled", "Add/Update Secret canceled.") // <<< CHANGED (Info level)
 		} else {
 			log.Printf("Error getting secret value via zenity for '%s': %v", name, err)
-			ui.ShowNotification("Input Error", "Failed to get secret value input.")
+			ui.ShowAdminNotification(ui.LevelWarn, "Input Error", "Failed to get secret value input.") // <<< CHANGED (Warn level)
 		}
 		return
 	}
 	if value == "" {
 		log.Printf("Add/Update Secret aborted: Empty secret value provided or dialog canceled for '%s'.", name)
-		ui.ShowNotification("Add Secret Aborted", "Secret value cannot be empty or dialog canceled.")
+		ui.ShowAdminNotification(ui.LevelWarn, "Add Secret Aborted", "Secret value cannot be empty or dialog canceled.") // <<< CHANGED (Warn level)
 		return
 	}
 
 	// === Store Secret (Error handling needed before optional steps) ===
 	if a.config == nil {
 		log.Println("Error: Cannot add secret, application config is nil.")
-		ui.ShowNotification("Internal Error", "Application configuration not loaded.")
+		ui.ShowAdminNotification(ui.LevelError, "Internal Error", "Application configuration not loaded.") // <<< CHANGED (Error level)
 		return
 	}
 	err = a.config.AddSecretReference(name, value)
 	if err != nil {
+		errMsg := fmt.Sprintf("Failed to store secret '%s'. See logs. Error: %v", name, err)
 		log.Printf("Error adding/updating secret '%s': %v", name, err)
-		ui.ShowNotification("Error", fmt.Sprintf("Failed to store secret '%s'. See logs.", name))
+		ui.ShowAdminNotification(ui.LevelError, "Error", errMsg) // <<< CHANGED (Error level)
 		return // Stop here if storing the secret failed
 	} else {
 		log.Printf("Secret '%s' updated in keychain and config.json.", name)
@@ -369,7 +376,6 @@ func (a *Application) onAddSecret() {
 	}
 
 	// === Step 3 (Optional): Ask to add replacement rule ===
-	// Use zenity.Question which returns error (nil on OK, ErrCanceled on Cancel/Close)
 	err = zenity.Question(
 		fmt.Sprintf("Secret '%s' stored successfully.\n\nDo you want to create a basic replacement rule for it now?\n(Replaces occurrences of the secret with entered text)", name),
 		zenity.Title(appName+" - Optional Step 3: Add Replacement Rule?"),
@@ -388,7 +394,7 @@ func (a *Application) onAddSecret() {
 
 	if !addRule { // User chose No, or dialog was canceled/errored
 		log.Println("Skipping optional replacement rule creation.")
-		ui.ShowNotification("Secret Stored", fmt.Sprintf("Secret '%s' stored. Manual restart required to activate.", name))
+		ui.ShowAdminNotification(ui.LevelInfo, "Secret Stored", fmt.Sprintf("Secret '%s' stored. Manual restart required to activate.", name)) // <<< CHANGED (Info level)
 		return // Finish workflow
 	}
 
@@ -404,7 +410,7 @@ func (a *Application) onAddSecret() {
 		} else {
 			log.Printf("Error getting replacement text via zenity: %v", err)
 		}
-		ui.ShowNotification("Rule Creation Canceled", fmt.Sprintf("Secret '%s' stored, but rule creation canceled. Manual restart required for secret.", name))
+		ui.ShowAdminNotification(ui.LevelInfo, "Rule Creation Canceled", fmt.Sprintf("Secret '%s' stored, but rule creation canceled. Manual restart required for secret.", name)) // <<< CHANGED (Info level)
 		return
 	}
 	// Allow empty replacement string if desired
@@ -412,8 +418,8 @@ func (a *Application) onAddSecret() {
 	// === Step 5 (Optional): Select Profile ===
 	if a.config.Profiles == nil || len(a.config.Profiles) == 0 {
 		log.Println("Cannot add replacement rule: No profiles found in configuration.")
-		ui.ShowNotification("Cannot Add Rule", "No profiles exist. Please add a profile manually first.")
-		ui.ShowNotification("Secret Stored", fmt.Sprintf("Secret '%s' stored. Manual restart required to activate.", name)) // Remind about secret
+		ui.ShowAdminNotification(ui.LevelWarn, "Cannot Add Rule", "No profiles exist. Please add a profile manually first.") // <<< CHANGED (Warn level)
+		ui.ShowAdminNotification(ui.LevelInfo, "Secret Stored", fmt.Sprintf("Secret '%s' stored. Manual restart required to activate.", name)) // Remind about secret // <<< CHANGED (Info level)
 		return
 	}
 
@@ -435,12 +441,12 @@ func (a *Application) onAddSecret() {
 		} else {
 			log.Printf("Error getting profile selection via zenity list: %v", err)
 		}
-		ui.ShowNotification("Rule Creation Canceled", fmt.Sprintf("Secret '%s' stored, but rule creation canceled. Manual restart required for secret.", name))
+		ui.ShowAdminNotification(ui.LevelInfo, "Rule Creation Canceled", fmt.Sprintf("Secret '%s' stored, but rule creation canceled. Manual restart required for secret.", name)) // <<< CHANGED (Info level)
 		return
 	}
 	if selectedProfileName == "" { // Should not happen if list not empty, but check
 		log.Println("Rule creation aborted: No profile selected.")
-		ui.ShowNotification("Rule Creation Canceled", fmt.Sprintf("Secret '%s' stored, but rule creation canceled (no profile selected). Manual restart required for secret.", name))
+		ui.ShowAdminNotification(ui.LevelInfo, "Rule Creation Canceled", fmt.Sprintf("Secret '%s' stored, but rule creation canceled (no profile selected). Manual restart required for secret.", name)) // <<< CHANGED (Info level)
 		return
 	}
 
@@ -456,8 +462,8 @@ func (a *Application) onAddSecret() {
 	targetProfileIndex, found := profileMap[selectedProfileName]
 	if !found { // Should be impossible if List worked correctly
 		log.Printf("Internal Error: Selected profile '%s' not found in config map.", selectedProfileName)
-		ui.ShowNotification("Internal Error", "Selected profile not found.")
-		ui.ShowNotification("Secret Stored", fmt.Sprintf("Secret '%s' stored. Manual restart required to activate.", name)) // Remind about secret
+		ui.ShowAdminNotification(ui.LevelError, "Internal Error", "Selected profile not found.") // <<< CHANGED (Error level)
+		ui.ShowAdminNotification(ui.LevelInfo, "Secret Stored", fmt.Sprintf("Secret '%s' stored. Manual restart required to activate.", name)) // Remind about secret // <<< CHANGED (Info level)
 		return
 	}
 
@@ -468,8 +474,9 @@ func (a *Application) onAddSecret() {
 	// Save the config again with the added rule
 	err = a.config.Save()
 	if err != nil {
+		errMsg := fmt.Sprintf("Failed to save config after adding replacement rule. Error: %v", err)
 		log.Printf("Error saving config after adding replacement rule for secret '%s': %v", name, err)
-		ui.ShowNotification("Save Error", "Failed to save config after adding replacement rule.")
+		ui.ShowAdminNotification(ui.LevelError, "Save Error", errMsg) // <<< CHANGED (Error level)
 		// Attempt to roll back in-memory change
 		prof := &a.config.Profiles[targetProfileIndex]
 		if len(prof.Replacements) > 0 {
@@ -478,7 +485,7 @@ func (a *Application) onAddSecret() {
 	} else {
 		log.Printf("Successfully added replacement rule for '%s' to profile '%s' and saved config.", name, selectedProfileName)
 		// Final success notification
-		ui.ShowNotification("Secret & Rule Added", fmt.Sprintf("Secret '%s' stored and rule added to profile '%s'. Manual restart required to activate.", name, selectedProfileName))
+		ui.ShowAdminNotification(ui.LevelInfo, "Secret & Rule Added", fmt.Sprintf("Secret '%s' stored and rule added to profile '%s'. Manual restart required to activate.", name, selectedProfileName)) // <<< CHANGED (Info level)
 	}
 }
 
@@ -487,7 +494,7 @@ func (a *Application) onListSecrets() {
 	log.Println("List Secrets menu item clicked.")
 	if a.config == nil {
 		log.Println("Error: Cannot list secrets, application config is nil.")
-		ui.ShowNotification("Internal Error", "Application configuration not loaded.")
+		ui.ShowAdminNotification(ui.LevelError, "Internal Error", "Application configuration not loaded.") // <<< CHANGED (Error level)
 		return
 	}
 	names := a.config.GetSecretNames()
@@ -505,7 +512,7 @@ func (a *Application) onListSecrets() {
 		log.Printf("Listing managed secrets:\n%s", logMessage)                                 // Log details
 	}
 	// Show brief notification first, then detailed dialog
-	ui.ShowNotification("Managed Secrets", message)
+	ui.ShowAdminNotification(ui.LevelInfo, "Managed Secrets", message) // <<< CHANGED (Info level)
 	zenity.Info(dialogMessage, zenity.Title(config.DefaultKeyringService+" - Managed Secrets"), zenity.InfoIcon)
 }
 
@@ -516,7 +523,7 @@ func (a *Application) onRemoveSecret() {
 
 	if a.config == nil {
 		log.Println("Error: Cannot remove secret, application config is nil.")
-		ui.ShowNotification("Internal Error", "Application configuration not loaded.")
+		ui.ShowAdminNotification(ui.LevelError, "Internal Error", "Application configuration not loaded.") // <<< CHANGED (Error level)
 		return
 	}
 
@@ -524,7 +531,7 @@ func (a *Application) onRemoveSecret() {
 	if len(names) == 0 {
 		log.Println("No secrets to remove.")
 		msg := "No secrets are currently managed."
-		ui.ShowNotification("Remove Secret", msg)
+		ui.ShowAdminNotification(ui.LevelInfo, "Remove Secret", msg) // <<< CHANGED (Info level)
 		zenity.Info(msg, zenity.Title(appName+" - Remove Secret"), zenity.InfoIcon)
 		return
 	}
@@ -537,16 +544,16 @@ func (a *Application) onRemoveSecret() {
 	if err != nil {
 		if errors.Is(err, zenity.ErrCanceled) {
 			log.Println("Remove secret canceled by user.")
-			ui.ShowNotification("Operation Canceled", "Remove secret canceled.")
+			ui.ShowAdminNotification(ui.LevelInfo, "Operation Canceled", "Remove secret canceled.") // <<< CHANGED (Info level)
 		} else {
 			log.Printf("Error getting selection via zenity list: %v", err)
-			ui.ShowNotification("Input Error", "Failed to get secret selection.")
+			ui.ShowAdminNotification(ui.LevelWarn, "Input Error", "Failed to get secret selection.") // <<< CHANGED (Warn level)
 		}
 		return
 	}
 	if nameToRemove == "" {
 		log.Println("Remove secret aborted: No secret selected.")
-		ui.ShowNotification("Operation Canceled", "No secret selected for removal.")
+		ui.ShowAdminNotification(ui.LevelInfo, "Operation Canceled", "No secret selected for removal.") // <<< CHANGED (Info level)
 		return
 	}
 
@@ -562,24 +569,25 @@ func (a *Application) onRemoveSecret() {
 
 	if err != nil && !errors.Is(err, zenity.ErrCanceled) { // Log unexpected errors
 		log.Printf("Error displaying confirmation dialog: %v", err)
-		ui.ShowNotification("Dialog Error", "Failed to show confirmation dialog.")
+		ui.ShowAdminNotification(ui.LevelWarn, "Dialog Error", "Failed to show confirmation dialog.") // <<< CHANGED (Warn level)
 		return // Abort on unexpected error
 	}
 
 	if !confirmed { // Handle Cancel or other errors treated as cancel
 		log.Printf("Removal of secret '%s' canceled by user or dialog error.", nameToRemove)
-		ui.ShowNotification("Operation Canceled", "Secret removal canceled.")
+		ui.ShowAdminNotification(ui.LevelInfo, "Operation Canceled", "Secret removal canceled.") // <<< CHANGED (Info level)
 		return
 	}
 
 	// Remove Secret
 	err = a.config.RemoveSecretReference(nameToRemove)
 	if err != nil {
+		errMsg := fmt.Sprintf("Failed to remove secret '%s'. See logs. Error: %v", nameToRemove, err)
 		log.Printf("Error removing secret '%s': %v", nameToRemove, err)
-		ui.ShowNotification("Error", fmt.Sprintf("Failed to remove secret '%s'. See logs.", nameToRemove))
+		ui.ShowAdminNotification(ui.LevelError, "Error", errMsg) // <<< CHANGED (Error level)
 	} else {
 		log.Printf("Secret '%s' removed from config and potentially keyring.", nameToRemove)
-		ui.ShowNotification("Secret Removed", fmt.Sprintf("Secret '%s' removed. Manual restart required for change to take effect.", nameToRemove))
+		ui.ShowAdminNotification(ui.LevelInfo, "Secret Removed", fmt.Sprintf("Secret '%s' removed. Manual restart required for change to take effect.", nameToRemove)) // <<< CHANGED (Info level)
 	}
 }
 
@@ -596,6 +604,7 @@ func (a *Application) onAddSimpleRule() {
 		zenity.Error("No profiles found. Please add a profile manually in config.json first.",
 			zenity.Title(appName+" - Error"),
 			zenity.ErrorIcon)
+		// No notification needed here as zenity shows the error directly
 		return
 	}
 
@@ -616,16 +625,16 @@ func (a *Application) onAddSimpleRule() {
 	if err != nil {
 		if errors.Is(err, zenity.ErrCanceled) {
 			log.Println("Add simple rule canceled by user (profile selection).")
-			ui.ShowNotification("Operation Canceled", "Add simple rule canceled.")
+			ui.ShowAdminNotification(ui.LevelInfo, "Operation Canceled", "Add simple rule canceled.") // <<< CHANGED (Info level)
 		} else {
 			log.Printf("Error getting profile selection via zenity list: %v", err)
-			ui.ShowNotification("Input Error", "Failed to get profile selection.")
+			ui.ShowAdminNotification(ui.LevelWarn, "Input Error", "Failed to get profile selection.") // <<< CHANGED (Warn level)
 		}
 		return
 	}
 	if selectedProfileName == "" { // Should not happen if list not empty, but check
 		log.Println("Add simple rule aborted: No profile selected.")
-		ui.ShowNotification("Operation Canceled", "No profile selected.")
+		ui.ShowAdminNotification(ui.LevelInfo, "Operation Canceled", "No profile selected.") // <<< CHANGED (Info level)
 		return
 	}
 
@@ -638,10 +647,10 @@ func (a *Application) onAddSimpleRule() {
 	if err != nil {
 		if errors.Is(err, zenity.ErrCanceled) {
 			log.Println("Add simple rule canceled by user (source text entry).")
-			ui.ShowNotification("Operation Canceled", "Add simple rule canceled.")
+			ui.ShowAdminNotification(ui.LevelInfo, "Operation Canceled", "Add simple rule canceled.") // <<< CHANGED (Info level)
 		} else {
 			log.Printf("Error getting source text via zenity: %v", err)
-			ui.ShowNotification("Input Error", "Failed to get source text input.")
+			ui.ShowAdminNotification(ui.LevelWarn, "Input Error", "Failed to get source text input.") // <<< CHANGED (Warn level)
 		}
 		return
 	}
@@ -656,10 +665,10 @@ func (a *Application) onAddSimpleRule() {
 	if err != nil {
 		if errors.Is(err, zenity.ErrCanceled) {
 			log.Println("Add simple rule canceled by user (replacement text entry).")
-			ui.ShowNotification("Operation Canceled", "Add simple rule canceled.")
+			ui.ShowAdminNotification(ui.LevelInfo, "Operation Canceled", "Add simple rule canceled.") // <<< CHANGED (Info level)
 		} else {
 			log.Printf("Error getting replacement text via zenity: %v", err)
-			ui.ShowNotification("Input Error", "Failed to get replacement text input.")
+			ui.ShowAdminNotification(ui.LevelWarn, "Input Error", "Failed to get replacement text input.") // <<< CHANGED (Warn level)
 		}
 		return
 	}
@@ -685,7 +694,7 @@ func (a *Application) onAddSimpleRule() {
 	} else {
 		// Unexpected error during question dialog
 		log.Printf("Error getting case sensitivity preference via zenity: %v", err)
-		ui.ShowNotification("Input Error", "Failed to get case sensitivity preference.")
+		ui.ShowAdminNotification(ui.LevelWarn, "Input Error", "Failed to get case sensitivity preference.") // <<< CHANGED (Warn level)
 		return
 	}
 
@@ -709,7 +718,7 @@ func (a *Application) onAddSimpleRule() {
 	targetProfileIndex, found := profileMap[selectedProfileName]
 	if !found { // Should be impossible if List worked correctly
 		log.Printf("Internal Error: Selected profile '%s' not found in internal map.", selectedProfileName)
-		ui.ShowNotification("Internal Error", "Selected profile could not be found.")
+		ui.ShowAdminNotification(ui.LevelError, "Internal Error", "Selected profile could not be found.") // <<< CHANGED (Error level)
 		return
 	}
 
@@ -720,8 +729,9 @@ func (a *Application) onAddSimpleRule() {
 	// Save the config
 	err = a.config.Save()
 	if err != nil {
+		errMsg := fmt.Sprintf("Failed to save config after adding rule. Error: %v", err)
 		log.Printf("Error saving config after adding simple rule to profile '%s': %v", selectedProfileName, err)
-		ui.ShowNotification("Save Error", "Failed to save config after adding rule.")
+		ui.ShowAdminNotification(ui.LevelError, "Save Error", errMsg) // <<< CHANGED (Error level)
 		// Attempt to roll back the change in memory
 		prof := &a.config.Profiles[targetProfileIndex]
 		if len(prof.Replacements) > 0 {
@@ -730,7 +740,7 @@ func (a *Application) onAddSimpleRule() {
 	} else {
 		log.Printf("Successfully added simple rule to profile '%s' and saved config.", selectedProfileName)
 		// Final success notification
-		ui.ShowNotification("Rule Added", fmt.Sprintf("Rule added to profile '%s'. Use 'Reload Configuration' to apply.", selectedProfileName))
+		ui.ShowAdminNotification(ui.LevelInfo, "Rule Added", fmt.Sprintf("Rule added to profile '%s'. Use 'Reload Configuration' to apply.", selectedProfileName)) // <<< CHANGED (Info level)
 	}
 }
 

@@ -1,8 +1,13 @@
 {
-  "use_notifications": true,
+  "admin_notification_level": "Error",
+  "notify_on_replacement": true,
   "temporary_clipboard": true,
-  "automatic_reversion": true,
-  "revert_hotkey": "ctrl+alt+r",
+  "automatic_reversion": false,
+  "revert_hotkey": "ctrl+shift+alt+r",
+  "secrets": {
+    "my_api_key_example": "managed",
+    "my_email_address": "managed"
+  },
   "profiles": [
     {
       "name": "General Cleanup",
@@ -16,7 +21,7 @@
         },
         {
           "regex": "(?i)name[s]?[/\\\\]",
-          "replace_with": ""
+          "replace_with": "",
           "preserve_case": true
         }
       ]
@@ -48,6 +53,10 @@
         {
           "regex": "\\b\\d{3}-\\d{2}-\\d{4}\\b",
           "replace_with": "[SSN REDACTED]"
+        },
+        {
+          "regex": "{{my_api_key_example}}", // Example using secret
+          "replace_with": "[API_KEY_REDACTED]"
         }
       ]
     }

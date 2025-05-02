@@ -40,6 +40,19 @@ func (m *Manager) UpdateResolvedSecrets(newSecrets map[string]string) { // Added
 	log.Println("Clipboard Manager: Updated resolved secrets.")
 }
 
+// UpdateConfig updates the config reference used by the manager. // <<< NEW METHOD ADDED
+func (m *Manager) UpdateConfig(newCfg *config.Config) {
+	m.config = newCfg
+	log.Println("Clipboard Manager: Updated config reference.")
+	// Optionally, re-evaluate revert status based on new config
+	if m.onRevertStatusChange != nil {
+		// Re-trigger status update based on whether temp clipboard is enabled
+		// and if something is actually stored
+		canRevertNow := m.config.TemporaryClipboard && m.previousClipboard != ""
+		m.onRevertStatusChange(canRevertNow)
+	}
+}
+
 // GetLastDiff returns the last pair of original/modified text for diffing.
 func (m *Manager) GetLastDiff() (original string, modified string, ok bool) {
 	if m.lastOriginalForDiff != "" || m.lastModifiedForDiff != "" {
@@ -104,6 +117,12 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 	totalReplacements := 0
 	var activeProfiles []string
 
+	// Check if config is loaded before proceeding
+	if m.config == nil || m.config.Profiles == nil {
+		log.Println("Error processing clipboard: Configuration not loaded.")
+		return "Error: Configuration not loaded.", false // Indicate error
+	}
+
 	// Apply replacements from all enabled profiles that match this hotkey
 	for _, profile := range m.config.Profiles { // Iterate using the config stored in the manager
 		if !profile.Enabled {
@@ -140,9 +159,11 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 						profileReplacements += replacedCount
 					} else {
 						// If count is 0 but text changed (e.g. empty match replaced), count as 1 change?
-						// Let's stick to counting based on regex matches reported by apply* funcs for now.
+						// For now, let's be precise: only count if regex engine reports >0 matches AND text changes.
+						// We could alternatively just check if replaced != newText and count it as 1 'effective change'
+						// if profileReplacements == 0, but that might be confusing.
 					}
-					totalReplacements += replacedCount // Accumulate total replacements counted
+					totalReplacements += replacedCount // Accumulate total replacements counted by regex engine
 					newText = replaced                 // Update text only if changed
 				}
 			} // End loop over replacements in profile
@@ -155,8 +176,8 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 				log.Printf("Applied %d %s replacement(s) from profile '%s'",
 					profileReplacements, directionText, profile.Name)
 			} else {
-                 log.Printf("Profile '%s' (%s) matched hotkey, but no replacements were made.", profile.Name, directionText)
-            }
+				log.Printf("Profile '%s' (%s) matched hotkey, but no replacements were made by its rules.", profile.Name, directionText)
+			}
 		} // End check for matching hotkey
 	} // End loop over profiles
 
@@ -224,14 +245,14 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 
 	// --- Generate notification message if replacements were made and text changed ---
 	var baseMessage string // Use a separate var for the core message
-	if totalReplacements > 0 && changedForDiff { // Ensure changes happened and were counted
+	if changedForDiff {   // Only generate message if text actually changed
 		directionIndicator := ""
 		if isReverse {
 			directionIndicator = " (reverse)"
 		}
 
-		log.Printf("Clipboard updated with %d total replacement(s)%s from profiles: %s",
-			totalReplacements, directionIndicator, strings.Join(activeProfiles, ", "))
+		log.Printf("Clipboard updated%s from profiles: %s. Total regex matches counted: %d",
+			directionIndicator, strings.Join(activeProfiles, ", "), totalReplacements)
 
 		profileNames := strings.Join(activeProfiles, ", ")
 		profilePart := ""
@@ -241,8 +262,14 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 			profilePart = fmt.Sprintf(" from profile: %s", profileNames)
 		}
 
-		baseMessage = fmt.Sprintf("%d replacement(s)%s applied%s.",
-			totalReplacements, directionIndicator, profilePart)
+		if totalReplacements > 0 {
+			baseMessage = fmt.Sprintf("%d replacement(s)%s applied%s.",
+				totalReplacements, directionIndicator, profilePart)
+		} else {
+			// Changed, but count is 0 (e.g., empty match replacement)
+			baseMessage = fmt.Sprintf("Clipboard updated%s%s.",
+				directionIndicator, profilePart)
+		}
 
 		// Use m.config for flags
 		if m.config.TemporaryClipboard && m.previousClipboard != "" { // Check if something is stored
@@ -257,10 +284,7 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 		// Append note about viewing changes
 		message = baseMessage + " Use Systray Menu to view details."
 
-	} else if changedForDiff && totalReplacements == 0 {
-         log.Println("Clipboard text changed, but no specific replacements were counted (e.g., empty match).")
-         message = "Clipboard updated. Use Systray Menu to view details." // Generic message if changed but count is 0
-    } else {
+	} else {
 		log.Println("No regex replacements applied or text did not change.")
 		message = "" // No message if no replacements/changes
 	}
@@ -284,7 +308,8 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 
 		// Handle automatic reversion *after* paste attempt if enabled
 		// Check config flags *again* inside goroutine using m.config
-		if m.config.TemporaryClipboard && m.config.AutomaticReversion && m.previousClipboard != "" {
+		// Add nil check for config in case it was somehow unset during the goroutine's sleep
+		if m.config != nil && m.config.TemporaryClipboard && m.config.AutomaticReversion && m.previousClipboard != "" {
 			// Delay *after* paste simulation
 			time.Sleep(300 * time.Millisecond)
 
@@ -450,9 +475,9 @@ func (m *Manager) applyReverseReplacement(text string, rep config.Replacement) (
 			log.Printf("Error: Unable to determine a non-empty source word for reverse replacement in rule '%s' after resolving placeholders.", rep.Regex)
 			return text, 0, fmt.Errorf("unable to determine non-empty source word for reverse replacement in rule '%s'", rep.Regex)
 		}
-        // Allow source and target to be the same if preserve_case is involved? Maybe not safe.
-        // Let's prevent source == target unless explicitly allowed somehow.
-        // if resolvedSourceWord == resolvedTargetWord {
+		// Allow source and target to be the same if preserve_case is involved? Maybe not safe.
+		// Let's prevent source == target unless explicitly allowed somehow.
+		// if resolvedSourceWord == resolvedTargetWord {
 		//	log.Printf("Error: Resolved source word ('%s') is the same as resolved target word ('%s') for reverse replacement in rule '%s'. Cannot reverse.", resolvedSourceWord, resolvedTargetWord, rep.Regex)
 		//	return text, 0, fmt.Errorf("resolved source and target are identical for reverse replacement in rule '%s'", rep.Regex)
 		//}
@@ -461,10 +486,11 @@ func (m *Manager) applyReverseReplacement(text string, rep config.Replacement) (
 	if errSource != nil {
 		// Error occurred during placeholder resolution for the source word
 		sourceOrigin := rep.ReverseWith
-		if sourceOrigin == "" { sourceOrigin = fmt.Sprintf("derived from regex '%s'", rep.Regex)}
+		if sourceOrigin == "" {
+			sourceOrigin = fmt.Sprintf("derived from regex '%s'", rep.Regex)
+		}
 		return text, 0, fmt.Errorf("failed to resolve placeholders in source word ('%s') for reverse: %w", sourceOrigin, errSource)
 	}
-
 
 	// --- Compile finder regex for the resolved target word ---
 	var findRe *regexp.Regexp
@@ -545,12 +571,12 @@ func (m *Manager) extractFirstAlternative(regex string) string {
 	if start == -1 {
 		// No group found, check if it's a simple alternation without outer parens
 		if strings.Contains(regex, "|") && !strings.Contains(regex, "\\|") {
-            // Basic split, might be wrong if pipes are escaped later
-            parts := strings.SplitN(regex, "|", 2)
-            if len(parts) > 0 {
-                 return strings.TrimSpace(parts[0])
-            }
-        }
+			// Basic split, might be wrong if pipes are escaped later
+			parts := strings.SplitN(regex, "|", 2)
+			if len(parts) > 0 {
+				return strings.TrimSpace(parts[0])
+			}
+		}
 		// Otherwise return cleaned regex as is
 		return strings.TrimSpace(regex)
 	}
@@ -610,9 +636,9 @@ func (m *Manager) extractFirstAlternative(regex string) string {
 		// Return the first part, trimmed of whitespace
 		// Also potentially unescape characters if needed, but likely not required for simple cases
 		firstAlt := strings.TrimSpace(alternatives[0])
-        // Basic unescaping (e.g., remove \ before | or other metachars if needed)
-        // firstAlt = strings.ReplaceAll(firstAlt, "\\|", "|")
-        // ... etc.
+		// Basic unescaping (e.g., remove \ before | or other metachars if needed)
+		// firstAlt = strings.ReplaceAll(firstAlt, "\\|", "|")
+		// ... etc.
 		return firstAlt
 	}
 
@@ -668,7 +694,7 @@ func (m *Manager) preserveCase(source, target string) string {
 		if len(sourceRunes) > 1 {
 			subsequentAreLower := true
 			for i := 1; i < len(sourceRunes); i++ { // Check from the second rune
-                r := sourceRunes[i]
+				r := sourceRunes[i]
 				if unicode.IsLetter(r) && !unicode.IsLower(r) {
 					subsequentAreLower = false
 					break
@@ -719,9 +745,9 @@ func (m *Manager) preserveCase(source, target string) string {
 			}
 			return string(newFirstTargetRune)
 		}
-        // If first source char is not a letter, maybe don't change target case?
-        // Let's return target as is in this case.
-        // return target
+		// If first source char is not a letter, maybe don't change target case?
+		// Let's return target as is in this case.
+		// return target
 	}
 
 	// Fallback: If all else fails (e.g., empty target?), return target unmodified.

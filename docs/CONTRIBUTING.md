@@ -2,7 +2,7 @@
 
 This document provides information useful for those looking to build the project from source or understand the codebase structure and dependencies.
 
-For general usage instructions, please see the main [README.md](README.md).
+For general usage instructions, please see the main [README.md](../README.md).
 
 ## Requirements
 
@@ -62,17 +62,16 @@ clipboard-regex-replace/
 │   ├── hotkey/             # Global hotkey registration and management
 │   ├── resources/          # Embedded resources (like the application icon)
 │   └── ui/                 # User interface elements (systray, notifications, dialogs)
-├── dist/                   # (Optional) Directory for distribution builds
-├── assets/                 # (Optional) Directory for external assets like images
-├── go.mod                  # Go module definition
-├── go.sum                  # Go module checksums
+├── docs/                   # Documentation files
+│   ├── CHANGELOG.md
+│   ├── CONFIGURATION.md
+│   ├── CONTRIBUTING.md
+│   └── FEATURES.md
 ├── config.json.example     # Example configuration file
 ├── icon.png                # External icon for better notification quality (optional)
 ├── README.md               # Main project readme
-├── CHANGELOG.md            # History of changes
 └── LICENSE                 # Project license (MIT)
 ```
-*(Note: The `dist/` and `assets/` directories might not be present in your current structure but are common conventions included here from the original README's example structure.)*
 
 ## Dependencies
 
@@ -87,4 +86,4 @@ clipboard-regex-replace/
 
 ## License
 
-Contributions are made under the project's [MIT License](LICENSE).
+Contributions are made under the project's [MIT License](../LICENSE).

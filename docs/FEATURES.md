@@ -2,7 +2,7 @@
 
 This document provides in-depth explanations of some key features of Clipboard Regex Replace.
 
-See the main [README.md](README.md) for a general overview and usage instructions.
+See the main [README.md](../README.md) for a general overview and usage instructions.
 See [CONFIGURATION.md](CONFIGURATION.md) for details on the `config.json` file format.
 
 ## Secure Secret Management
@@ -11,7 +11,7 @@ To avoid storing sensitive data (like passwords, API keys, emails) directly in `
 
 ### How it Works
 
-1.  **Storage:** Secrets are stored securely in your operating system's native credential store (e.g., Windows Credential Manager, macOS Keychain, Linux Secret Service/Keyring) under the service name `LLMClipboardFilter2`.
+1.  **Storage:** Secrets are stored securely in your operating system's native credential store (e.g., Windows Credential Manager, macOS Keychain, Linux Secret Service/Keyring) under the service name `Clipboard Regex Replace`.
 2.  **Configuration:** In `config.json`, you define a logical name for each secret in the top-level `secrets` map. The value must always be `"managed"`.
     ```json
     "secrets": {
@@ -45,7 +45,7 @@ The "Manage Secrets" submenu in the system tray provides these actions:
     *   Optionally offers to create a basic replacement rule using the new secret (e.g., replace `{{my_api_key}}` with `[REDACTED]`).
     *   **Requires application restart after use.**
 *   **List Secret Names**:
-    *   Shows a notification and logs the logical names of all secrets currently declared in the `secrets` map in `config.json`.
+    *   Shows a notification (if admin level >= Info) and logs the logical names of all secrets currently declared in the `secrets` map in `config.json`.
     *   It does *not* display the actual secret values.
 *   **Remove Secret...**:
     *   Prompts you to select one of the managed logical names from a list.

@@ -7,7 +7,7 @@
 **Version:** v1.7.3
 **Language:** Go 1.23.6
 **License:** MIT
-**Platforms:** Windows, macOS, Linux
+**Platforms:** Windows, macOS, Linux X11 (Kubuntu/Ubuntu fully supported)
 
 ---
 
@@ -63,6 +63,7 @@ c:\Programs\Clipboard-Regex-Replace-2/
 │   ├── FEATURES.md                  # Detailed feature documentation
 │   ├── CONFIGURATION.md             # Config structure & examples
 │   ├── CONTRIBUTING.md              # Development guide
+│   ├── LINUX_SUPPORT.md             # Linux/Kubuntu setup guide
 │   └── CHANGELOG.md                 # Version history
 ├── demo/                            # Screenshots & GIFs
 ├── config.json.example              # Example configuration
@@ -80,16 +81,25 @@ c:\Programs\Clipboard-Regex-Replace-2/
 
 ## Key Dependencies
 
-| Package | Purpose | Version |
-|---------|---------|---------|
-| `github.com/atotto/clipboard` | Read/write clipboard | v1.4.3 |
-| `golang.design/x/hotkey` | Global hotkey registration | v0.4.1 |
-| `github.com/getlantern/systray` | System tray icon & menu | v1.2.2 |
-| `github.com/99designs/keyring` | Secure OS credential store | v1.2.2 |
-| `github.com/ncruces/zenity` | Native dialogs | v0.10.16 |
-| `github.com/go-toast/toast` | Windows toast notifications | v0.0.0 |
-| `github.com/gen2brain/beeep` | Cross-platform notifications | v0.0.0 |
-| `github.com/sergi/go-diff` | Generate text diffs | v1.3.1 |
+| Package | Purpose | Version | Platform Notes |
+|---------|---------|---------|----------------|
+| `github.com/atotto/clipboard` | Read/write clipboard | v1.4.3 | Linux: Requires xclip/xsel/wl-clipboard |
+| `golang.design/x/hotkey` | Global hotkey registration | v0.4.1 | Linux: Requires libx11-dev (CGo) |
+| `github.com/getlantern/systray` | System tray icon & menu | v1.2.2 | Cross-platform (GTK on Linux) |
+| `github.com/99designs/keyring` | Secure OS credential store | v1.2.2 | Linux: Secret Service/KWallet |
+| `github.com/ncruces/zenity` | Native dialogs | v0.10.16 | Cross-platform |
+| `github.com/go-toast/toast` | Windows toast notifications | v0.0.0 | Windows only |
+| `github.com/gen2brain/beeep` | Cross-platform notifications | v0.0.0 | Linux: libnotify |
+| `github.com/sergi/go-diff` | Generate text diffs | v1.3.1 | Cross-platform |
+
+### Linux-Specific External Dependencies
+
+On Linux (Kubuntu/Ubuntu), install these system packages:
+```bash
+sudo apt install -y libx11-dev xclip xdotool xdg-utils
+```
+
+See [docs/LINUX_SUPPORT.md](docs/LINUX_SUPPORT.md) for complete Linux setup instructions.
 
 ---
 
@@ -114,33 +124,52 @@ c:\Programs\Clipboard-Regex-Replace-2/
   - Simple rule addition
 
 ### 3. Clipboard Manager: `internal/clipboard/clipboard.go`
+- **Thread-safe** using `sync.RWMutex` for concurrent access protection
 - `ProcessClipboard()`: Main transformation engine
 - Applies regex replacements from matching profiles
+- **Regex timeout protection** (5s default) prevents ReDoS attacks
 - Resolves `{{secret_name}}` placeholders from keychain
 - Supports forward and reverse replacements
 - Maintains clipboard history for revert
 - Generates diff reports
-- Handles platform-specific paste operations
+- Handles platform-specific paste operations with **configurable delays**
 - Case-preserving replacement logic
+- **Panic recovery** in all background goroutines
 
 ### 4. Configuration Manager: `internal/config/config.go`
 - Defines structs: `Config`, `ProfileConfig`, `Replacement`
 - `Load()`: Reads config.json and resolves secrets
+- **Comprehensive validation**: Checks regex patterns, profile names, hotkeys at load time
 - `Save()`: Persists config changes
 - Manages secret references (logical names → keyring storage)
 - Creates default config if missing
 - Backward compatibility handling
+- **Performance settings** with defaults:
+  - `PasteDelayMs` (400ms) - configurable paste delay
+  - `RevertDelayMs` (300ms) - configurable revert delay
+  - `RegexTimeoutMs` (5000ms) - regex operation timeout
+  - `DiffContextLines` (3) - diff viewer context lines
 
 ### 5. Hotkey Manager: `internal/hotkey/hotkey.go`
+- **Thread-safe** using `sync.RWMutex` for concurrent access protection
 - Registers/unregisters global hotkeys using `golang.design/x/hotkey`
 - Maps hotkey strings to callback functions
 - Supports both forward and reverse hotkeys per profile
-- Lifecycle management for hotkey registration
+- **Goroutine lifecycle management** with quit channels for clean shutdown
+- **No goroutine leaks** - all listeners properly stopped on config reload
+- **Panic recovery** in all hotkey listeners
+- Expanded KeyMap includes arrow keys (up, down, left, right) and aliases (esc, return)
 
 ### 6. UI Components: `internal/ui/`
-- **systray.go**: System tray icon, dynamic menu with profile toggles
+- **systray.go**:
+  - **Thread-safe** using `sync.RWMutex` for config access
+  - System tray icon, dynamic menu with profile toggles
+  - **Panic recovery** in all UI handlers
 - **notifications.go**: Admin and replacement notifications with verbosity control
-- **diffviewer.go**: Generates HTML diff report and opens in browser
+- **diffviewer.go**:
+  - Generates HTML diff report with **configurable context lines**
+  - Opens in browser
+  - **Panic recovery** in cleanup goroutines
 - **shellexecute_windows.go**: Windows-specific file opening
 
 ---
@@ -156,6 +185,10 @@ The application uses `config.json` in the executable's directory:
   "temporary_clipboard": true,
   "automatic_reversion": false,
   "revert_hotkey": "ctrl+shift+alt+r",
+  "paste_delay_ms": 400,
+  "revert_delay_ms": 300,
+  "regex_timeout_ms": 5000,
+  "diff_context_lines": 3,
   "secrets": {
     "my_api_key": "managed",
     "my_email": "managed"
@@ -184,6 +217,10 @@ The application uses `config.json` in the executable's directory:
 - **notify_on_replacement**: Show notifications on successful transformations
 - **temporary_clipboard**: Enable clipboard backup for revert
 - **automatic_reversion**: Auto-revert clipboard after paste
+- **paste_delay_ms**: Delay before paste simulation (default: 400ms, optional)
+- **revert_delay_ms**: Delay before auto-revert (default: 300ms, optional)
+- **regex_timeout_ms**: Timeout for regex operations (default: 5000ms, optional)
+- **diff_context_lines**: Lines of context in diff viewer (default: 3, optional)
 - **secrets**: Logical names mapped to OS keychain entries
 - **profiles**: Rule sets with individual hotkeys and enable/disable state
 
@@ -199,26 +236,44 @@ The application uses `config.json` in the executable's directory:
 
 ### Build Commands
 
+**Windows:**
 ```bash
 # Standard executable
-go build -o ClipboardRegexReplace cmd/clipregex/main.go
+go build -o ClipboardRegexReplace.exe cmd/clipregex/main.go
 
 # Windows GUI executable (no console window)
 go build -ldflags="-H=windowsgui" -o ClipboardRegexReplace.exe cmd/clipregex/main.go
+```
 
+**Linux (Kubuntu/Ubuntu):**
+```bash
+# Install build dependencies first
+sudo apt install -y libx11-dev xclip xdotool xdg-utils
+
+# Build executable (CGo enabled by default)
+go build -o clipboardregexreplace cmd/clipregex/main.go
+
+# Make executable
+chmod +x clipboardregexreplace
+```
+
+**Cross-Platform:**
+```bash
 # Run from source
 go run cmd/clipregex/main.go
 
-# Install dependencies
+# Install/update Go dependencies
 go mod tidy
 ```
 
 ### Development Requirements
 - Go 1.16+ (project uses 1.23.6)
+- GCC compiler (for CGo on Linux)
 - OS with credential store support:
   - Windows: Credential Manager
   - macOS: Keychain
   - Linux: Secret Service (GNOME Keyring, KWallet)
+- **Linux-specific**: libx11-dev, xclip/xsel, xdotool (see [LINUX_SUPPORT.md](docs/LINUX_SUPPORT.md))
 
 ### Testing
 Currently no automated test suite. Manual testing workflow:
@@ -283,6 +338,66 @@ Currently no automated test suite. Manual testing workflow:
 
 ---
 
+## Recent Improvements (2026-01-19)
+
+### Phase 1: Critical Race Conditions Fixed
+**Problem:** Concurrent access to shared state could cause crashes and data corruption.
+
+**Solutions:**
+- Added `sync.RWMutex` to Clipboard, Hotkey, and Systray managers
+- Protected all shared state with proper lock/unlock patterns
+- Made defensive copies before long operations
+- Fixed goroutine leaks in hotkey listeners with quit channels
+- Added panic recovery throughout
+
+### Phase 2: High Priority Improvements
+**Modernization and Safety:**
+- Replaced deprecated `ioutil` with Go 1.16+ `os` package
+- Added panic recovery to all diffviewer goroutines
+- Expanded KeyMap with arrow keys and aliases
+- Implemented comprehensive config validation:
+  - Validates regex patterns at load time
+  - Checks for duplicate profile names
+  - Validates hotkey strings
+  - Warns about duplicate hotkeys
+
+### Phase 3: Medium Priority Enhancements
+**Performance and Protection:**
+- **Configurable timeouts**: All delays now configurable via config.json
+- **Regex timeout enforcement**: Prevents ReDoS attacks with 5-second default timeout
+- **Context-aware timeout**: Uses `context.WithTimeout` for safe regex operations
+- **Configurable diff viewer**: Context lines now customizable
+- **No magic numbers**: All hardcoded values replaced with config options
+
+**Security Benefits:**
+- Protection against malicious regex patterns
+- Timeout on long-running operations
+- Panic recovery prevents crashes
+- Thread-safe concurrent access
+
+### Phase 4: Linux X11 Support (2026-01-19)
+**Feature Addition:** Full Kubuntu/Ubuntu X11 Support
+
+**Implementation:**
+- Verified existing libraries already support Linux X11
+- Documented Linux-specific dependencies and build process
+- Created comprehensive Linux setup guide ([docs/LINUX_SUPPORT.md](docs/LINUX_SUPPORT.md))
+- Updated README with Linux quick start instructions
+- No code changes needed - ~90% of codebase already cross-platform
+
+**Linux Requirements:**
+- System packages: libx11-dev, xclip/xsel, xdotool, xdg-utils
+- CGo enabled for X11 hotkey support
+- X11 display server (Wayland experimental)
+
+**Platform Support Status:**
+- ✅ Windows: Fully supported
+- ✅ macOS: Fully supported
+- ✅ Linux X11: Fully supported (Kubuntu/Ubuntu tested)
+- ⚠️ Linux Wayland: Experimental (clipboard works, hotkeys limited)
+
+---
+
 ## Important Patterns & Conventions
 
 ### Secret Management
@@ -307,9 +422,21 @@ Currently no automated test suite. Manual testing workflow:
 - Panic recovery in main loop
 
 ### Platform-Specific Code
-- Use build tags for platform-specific implementations
-- Windows: `paste_windows.go`, `shellexecute_windows.go`
-- Unix: `paste_unix.go`
+- Use build tags for platform-specific implementations:
+  - `//go:build windows` for Windows-only code
+  - `//go:build !windows` for Unix/Linux/macOS code
+  - `//go:build linux` for Linux-specific code (if needed)
+- **Windows**: `paste_windows.go`, `shellexecute_windows.go`
+- **Unix (Linux/macOS)**: `paste_unix.go`
+- Platform detection at runtime via `runtime.GOOS` for cross-platform code
+
+**Linux Notes:**
+- Clipboard operations require xclip/xsel/wl-clipboard installed
+- Hotkey registration requires X11 (libx11) via CGo
+- Paste simulation uses xdotool (X11) or wtype (Wayland)
+- System tray uses GTK (usually pre-installed on desktop distros)
+- File opening uses xdg-open standard
+- See [docs/LINUX_SUPPORT.md](docs/LINUX_SUPPORT.md) for details
 
 ---
 
@@ -451,5 +578,9 @@ For detailed contributing guidelines, see [docs/CONTRIBUTING.md](docs/CONTRIBUTI
 ---
 
 **Last Updated:** 2026-01-19
-**Document Version:** 1.0
-**Claude Agent ID:** a85a04a (Explore agent used for project analysis)
+**Document Version:** 1.1
+**Major Changes:**
+- Documented Phase 1-3 improvements (race conditions, modernization, performance)
+- Updated configuration structure with new performance settings
+- Highlighted thread-safety improvements across all managers
+- Added security enhancements documentation

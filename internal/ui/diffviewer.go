@@ -4,7 +4,6 @@ package ui
 import (
 	"fmt"
 	"html"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -272,7 +271,7 @@ func ShowDiffViewer(original, modified string) {
 	)
 
 	// --- File creation and opening logic (remains the same) ---
-	tmpFile, err := ioutil.TempFile("", "clipdiff-*.html")
+	tmpFile, err := os.CreateTemp("", "clipdiff-*.html")
 	if err != nil {
 		errMsg := fmt.Sprintf("Could not create temporary file. Error: %v", err)
 		log.Printf("Error creating temp file for diff view: %v", err)
@@ -306,6 +305,11 @@ func ShowDiffViewer(original, modified string) {
 		ShowAdminNotification(LevelWarn, "Diff View Error", errMsg)
 	}
 	go func(pathToDelete string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("RECOVERED FROM PANIC IN DIFF FILE CLEANUP: %v", r)
+			}
+		}()
 		time.Sleep(1 * time.Minute)
 		err := os.Remove(pathToDelete)
 		if err != nil && !os.IsNotExist(err) {
@@ -340,6 +344,11 @@ func OpenFileInDefaultApp(filePath string) error {
 		}
 		log.Printf("Successfully started command for %s", runtime.GOOS)
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("RECOVERED FROM PANIC IN MACOS CMD WAIT: %v", r)
+				}
+			}()
 			_ = cmd.Wait()
 		}()
 		return nil
@@ -353,6 +362,11 @@ func OpenFileInDefaultApp(filePath string) error {
 		}
 		log.Printf("Successfully started command for %s", runtime.GOOS)
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("RECOVERED FROM PANIC IN LINUX CMD WAIT: %v", r)
+				}
+			}()
 			_ = cmd.Wait()
 		}()
 		return nil

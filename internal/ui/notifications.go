@@ -1,14 +1,13 @@
 package ui
 
 import (
-	"io/ioutil"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
-	"fmt"
 
 	"github.com/TanaroSch/clipboard-regex-replace/internal/config" // Need config access
 	"github.com/gen2brain/beeep"
@@ -160,7 +159,7 @@ func writeTempIcon(iconData []byte) (string, error) {
 	if len(iconData) == 0 {
 		return "", fmt.Errorf("cannot write empty icon data")
 	}
-	tmpFile, err := ioutil.TempFile("", "clipregex-icon-*.ico")
+	tmpFile, err := os.CreateTemp("", "clipregex-icon-*.ico")
 	if err != nil {
 		return "", err
 	}

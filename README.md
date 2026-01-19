@@ -24,7 +24,7 @@ Clipboard Regex Replace is a lightweight, standalone Go application that runs in
 *   👁️ **Change Diff Viewer:** See exactly what changed with a browser-based diff view after each operation.
 *   📌 **System Tray Control:** Manage profiles, secrets, rules, view diffs, revert changes, reload config, and quit – all from the systray icon.
 *   🔔 **Configurable Notifications:** Separately control notifications for administrative events (errors, reloads, etc.) with verbosity levels and for successful clipboard replacements. ([Details...](docs/CONFIGURATION.md#configuration-options-explained))
-*   💻 **Cross-Platform:** Runs on Windows, macOS, and Linux (core functionality). Native features adapt to the OS.
+*   💻 **Cross-Platform:** Runs on Windows, macOS, and Linux X11 (Kubuntu/Ubuntu). Native features adapt to the OS. ([Linux Setup Guide](docs/LINUX_SUPPORT.md))
 *   📦 **Standalone:** Single executable file (plus external `config.json`).
 
 ➡️ **See [docs/FEATURES.md](docs/FEATURES.md) for in-depth explanations of key features.**
@@ -41,6 +41,8 @@ Clipboard Regex Replace is a lightweight, standalone Go application that runs in
 
 ## Quick Start
 
+### Windows
+
 1.  **Download:** Grab the latest release from the [Releases Page](https://github.com/TanaroSch/Clipboard-Regex-Replace-2/releases) (Link needs updating if it's a different repo).
 2.  **Configure:**
     *   Place the executable in a folder.
@@ -51,6 +53,25 @@ Clipboard Regex Replace is a lightweight, standalone Go application that runs in
 5.  **(Optional) Add Simple Rules:** Right-click the systray icon -> Add Simple Rule... (Requires Config Reload).
 6.  **(Optional) Autostart on Startup:** Don't create a shortcut to the .exe itself, create a shortcut of the ```CliboardRegexReplace.bat``` and place it in the startup folder instead.
 7.  **Use:** Copy text, press your configured hotkey, and paste!
+
+### Linux (Kubuntu/Ubuntu)
+
+1.  **Install Dependencies:**
+    ```bash
+    sudo apt install -y libx11-dev xclip xdotool xdg-utils
+    ```
+2.  **Build or Download:**
+    *   **Option A - Build from source:**
+      ```bash
+      go build -o clipboardregexreplace cmd/clipregex/main.go
+      chmod +x clipboardregexreplace
+      ```
+    *   **Option B - Download** from [Releases Page](https://github.com/TanaroSch/Clipboard-Regex-Replace-2/releases)
+3.  **Configure:** Copy `config.json.example` to `config.json` and edit as needed.
+4.  **Run:** `./clipboardregexreplace` (A system tray icon should appear)
+5.  **Autostart:** See detailed instructions in [docs/LINUX_SUPPORT.md](docs/LINUX_SUPPORT.md)
+
+📖 **Full Linux Documentation:** [docs/LINUX_SUPPORT.md](docs/LINUX_SUPPORT.md)
 
 ---
 

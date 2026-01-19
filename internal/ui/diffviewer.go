@@ -4,12 +4,9 @@ package ui
 import (
 	"fmt"
 	"html"
-	"io/ioutil"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -134,7 +131,6 @@ func writeDiffLine(builder *strings.Builder, op diffmatchpatch.Operation, origNu
 		contentToRender = " \n"
 	}
 
-
 	// Render the line as a div
 	builder.WriteString(fmt.Sprintf(
 		"<div class=\"line %s\"><span class=\"line-num orig-num\">%s</span><span class=\"line-num mod-num\">%s</span><span class=\"line-op\">%s</span><span class=\"line-content\">%s</span></div>",
@@ -142,14 +138,16 @@ func writeDiffLine(builder *strings.Builder, op diffmatchpatch.Operation, origNu
 	))
 }
 
-
 // ShowDiffViewer generates an HTML diff view and opens it in the default browser.
 // (CSS and overall structure remain the same as the previous corrected version)
-func ShowDiffViewer(original, modified string) {
+func ShowDiffViewer(original, modified string, contextLines int) {
 	log.Println("Generating enhanced diff view...")
 	diffs, summary := diffutil.GenerateDiffAndSummary(original, modified)
 
-	contextLines := 3 // Number of unchanged lines to show around a change
+	// Use provided contextLines (or default if <= 0)
+	if contextLines <= 0 {
+		contextLines = 3 // Fallback to default
+	}
 	renderedHtmlDiffContent := renderUnifiedDiffHtml(diffs, contextLines)
 
 	// HTML structure and CSS remain the same as the previous successful unified diff attempt
@@ -272,7 +270,7 @@ func ShowDiffViewer(original, modified string) {
 	)
 
 	// --- File creation and opening logic (remains the same) ---
-	tmpFile, err := ioutil.TempFile("", "clipdiff-*.html")
+	tmpFile, err := os.CreateTemp("", "clipdiff-*.html")
 	if err != nil {
 		errMsg := fmt.Sprintf("Could not create temporary file. Error: %v", err)
 		log.Printf("Error creating temp file for diff view: %v", err)
@@ -306,6 +304,11 @@ func ShowDiffViewer(original, modified string) {
 		ShowAdminNotification(LevelWarn, "Diff View Error", errMsg)
 	}
 	go func(pathToDelete string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("RECOVERED FROM PANIC IN DIFF FILE CLEANUP: %v", r)
+			}
+		}()
 		time.Sleep(1 * time.Minute)
 		err := os.Remove(pathToDelete)
 		if err != nil && !os.IsNotExist(err) {
@@ -314,47 +317,4 @@ func ShowDiffViewer(original, modified string) {
 			log.Printf("Attempted deletion of temporary diff file: %s", pathToDelete)
 		}
 	}(absPath)
-}
-
-
-// OpenFileInDefaultApp remains the same
-func OpenFileInDefaultApp(filePath string) error {
-	log.Printf("Executing OpenFileInDefaultApp for path: %s on OS: %s", filePath, runtime.GOOS)
-	switch runtime.GOOS {
-	case "windows":
-		log.Println("Windows: Attempting method: ShellExecuteW API")
-		err := windowsOpenFileInDefaultApp(filePath)
-		if err == nil {
-			log.Println("Windows Method (ShellExecuteW) succeeded.")
-		} else {
-			log.Printf("Windows Method (ShellExecuteW) failed: %v", err)
-		}
-		return err
-	case "darwin":
-		cmd := exec.Command("open", filePath)
-		log.Printf("macOS - Executing: %s %v", cmd.Path, cmd.Args)
-		err := cmd.Start()
-		if err != nil {
-			log.Printf("Failed to start command (%s): %v", cmd.String(), err)
-			return fmt.Errorf("failed to start command (%s): %w", cmd.String(), err)
-		}
-		log.Printf("Successfully started command for %s", runtime.GOOS)
-		go func() {
-			_ = cmd.Wait()
-		}()
-		return nil
-	default: // Assume Linux or other Unix-like systems
-		cmd := exec.Command("xdg-open", filePath)
-		log.Printf("Linux/Other - Executing: %s %v", cmd.Path, cmd.Args)
-		err := cmd.Start()
-		if err != nil {
-			log.Printf("Failed to start command (%s): %v", cmd.String(), err)
-			return fmt.Errorf("failed to start command (%s): %w", cmd.String(), err)
-		}
-		log.Printf("Successfully started command for %s", runtime.GOOS)
-		go func() {
-			_ = cmd.Wait()
-		}()
-		return nil
-	}
 }

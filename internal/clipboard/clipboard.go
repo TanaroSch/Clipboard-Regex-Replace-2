@@ -2,11 +2,13 @@
 package clipboard
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -16,6 +18,7 @@ import (
 
 // Manager handles clipboard operations and transformations
 type Manager struct {
+	mu                       sync.RWMutex      // Protects all fields below
 	previousClipboard        string
 	lastTransformedClipboard string
 	config                   *config.Config // Holds the overall config reference
@@ -36,12 +39,16 @@ func NewManager(cfg *config.Config, resolvedSecrets map[string]string, onRevertS
 
 // UpdateResolvedSecrets allows updating the secrets map after config reload.
 func (m *Manager) UpdateResolvedSecrets(newSecrets map[string]string) { // Added
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.resolvedSecrets = newSecrets
 	log.Println("Clipboard Manager: Updated resolved secrets.")
 }
 
 // UpdateConfig updates the config reference used by the manager. // <<< NEW METHOD ADDED
 func (m *Manager) UpdateConfig(newCfg *config.Config) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.config = newCfg
 	log.Println("Clipboard Manager: Updated config reference.")
 	// Optionally, re-evaluate revert status based on new config
@@ -55,6 +62,8 @@ func (m *Manager) UpdateConfig(newCfg *config.Config) {
 
 // GetLastDiff returns the last pair of original/modified text for diffing.
 func (m *Manager) GetLastDiff() (original string, modified string, ok bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if m.lastOriginalForDiff != "" || m.lastModifiedForDiff != "" {
 		return m.lastOriginalForDiff, m.lastModifiedForDiff, true
 	}
@@ -112,19 +121,28 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 		return "", false
 	}
 
+	// Lock for reading initial state
+	m.mu.RLock()
 	isNewContent := m.lastTransformedClipboard == "" || origText != m.lastTransformedClipboard
-	newText := origText
-	totalReplacements := 0
-	var activeProfiles []string
 
 	// Check if config is loaded before proceeding
 	if m.config == nil || m.config.Profiles == nil {
+		m.mu.RUnlock()
 		log.Println("Error processing clipboard: Configuration not loaded.")
 		return "Error: Configuration not loaded.", false // Indicate error
 	}
 
+	// Make a copy of profiles to work with (to avoid holding lock during processing)
+	profilesCopy := make([]config.ProfileConfig, len(m.config.Profiles))
+	copy(profilesCopy, m.config.Profiles)
+	m.mu.RUnlock()
+
+	newText := origText
+	totalReplacements := 0
+	var activeProfiles []string
+
 	// Apply replacements from all enabled profiles that match this hotkey
-	for _, profile := range m.config.Profiles { // Iterate using the config stored in the manager
+	for _, profile := range profilesCopy { // Iterate using the copied profiles
 		if !profile.Enabled {
 			continue
 		}
@@ -181,9 +199,23 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 		} // End check for matching hotkey
 	} // End loop over profiles
 
+	// Lock for writing state changes
+	m.mu.Lock()
+
+	// Read config flags under lock
+	temporaryClipboard := m.config != nil && m.config.TemporaryClipboard
+	automaticReversion := m.config != nil && m.config.AutomaticReversion
+	pasteDelayMs := config.DefaultPasteDelayMs
+	revertDelayMs := config.DefaultRevertDelayMs
+	revertHotkey := ""
+	if m.config != nil {
+		revertHotkey = m.config.RevertHotkey
+		pasteDelayMs = m.config.GetPasteDelay()
+		revertDelayMs = m.config.GetRevertDelay()
+	}
+
 	// --- Temporary clipboard logic ---
-	// Use m.config for flags
-	if m.config.TemporaryClipboard {
+	if temporaryClipboard {
 		if isNewContent && newText != origText {
 			m.previousClipboard = origText
 			if m.onRevertStatusChange != nil {
@@ -234,6 +266,7 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 			log.Printf("Failed to write to clipboard: %v", err)
 			m.lastOriginalForDiff = "" // Clear diff state on error
 			m.lastModifiedForDiff = ""
+			m.mu.Unlock()
 			return "", false // Return false for changedForDiff
 		}
 		// Track what was just placed in the clipboard
@@ -242,6 +275,11 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 		// If no change, ensure lastTransformed is same as original read
 		m.lastTransformedClipboard = origText
 	}
+
+	// Capture previous clipboard value for goroutine
+	previousClipboardCopy := m.previousClipboard
+
+	m.mu.Unlock()
 
 	// --- Generate notification message if replacements were made and text changed ---
 	var baseMessage string // Use a separate var for the core message
@@ -271,12 +309,12 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 				directionIndicator, profilePart)
 		}
 
-		// Use m.config for flags
-		if m.config.TemporaryClipboard && m.previousClipboard != "" { // Check if something is stored
-			if m.config.AutomaticReversion {
+		// Use captured config flags (from earlier when we had the lock)
+		if temporaryClipboard && previousClipboardCopy != "" { // Check if something is stored
+			if automaticReversion {
 				baseMessage += " Clipboard will be automatically reverted after paste."
-			} else if m.config.RevertHotkey != "" {
-				baseMessage += fmt.Sprintf(" Press %s or use Systray Menu to revert.", m.config.RevertHotkey)
+			} else if revertHotkey != "" {
+				baseMessage += fmt.Sprintf(" Press %s or use Systray Menu to revert.", revertHotkey)
 			} else {
 				baseMessage += " Use Systray Menu to revert."
 			}
@@ -301,23 +339,25 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 		log.Println("Starting paste operation in separate goroutine...")
 
 		// Delay before pasting to allow clipboard system and target app to be ready
-		time.Sleep(400 * time.Millisecond)
+		time.Sleep(time.Duration(pasteDelayMs) * time.Millisecond)
 
 		// Try to paste the content *currently* in the clipboard (which is newText)
 		simulatePlatformPaste() // Call the platform-specific paste function
 
 		// Handle automatic reversion *after* paste attempt if enabled
-		// Check config flags *again* inside goroutine using m.config
-		// Add nil check for config in case it was somehow unset during the goroutine's sleep
-		if m.config != nil && m.config.TemporaryClipboard && m.config.AutomaticReversion && m.previousClipboard != "" {
+		// Use captured config flags (no lock needed, these are copies)
+		if temporaryClipboard && automaticReversion && previousClipboardCopy != "" {
 			// Delay *after* paste simulation
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(time.Duration(revertDelayMs) * time.Millisecond)
 
 			// Restore original clipboard
-			if err := clipboard.WriteAll(m.previousClipboard); err != nil {
+			if err := clipboard.WriteAll(previousClipboardCopy); err != nil {
 				log.Printf("Failed to automatically restore original clipboard: %v", err)
 			} else {
 				log.Println("Original clipboard content automatically restored after paste.")
+
+				// Lock for state updates
+				m.mu.Lock()
 				currentStored := m.previousClipboard // Capture before clearing
 				// Clear the stored original and update UI status
 				m.previousClipboard = ""
@@ -325,10 +365,18 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 				// Clear diff state too
 				m.lastOriginalForDiff = ""
 				m.lastModifiedForDiff = ""
+				m.mu.Unlock()
 
 				if m.onRevertStatusChange != nil {
 					// Run callback in a separate goroutine to avoid blocking paste thread if UI is slow
-					go m.onRevertStatusChange(false)
+					go func() {
+						defer func() {
+							if r := recover(); r != nil {
+								log.Printf("RECOVERED FROM PANIC IN REVERT CALLBACK: %v", r)
+							}
+						}()
+						m.onRevertStatusChange(false)
+					}()
 				}
 				// Also update diff status in UI? Needs coordination. For now, it updates on next hotkey press.
 			}
@@ -343,7 +391,11 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 
 // RestoreOriginalClipboard reverts to the previous clipboard content
 func (m *Manager) RestoreOriginalClipboard() bool {
-	if m.previousClipboard != "" {
+	m.mu.Lock()
+	previousClipboardCopy := m.previousClipboard
+	m.mu.Unlock()
+
+	if previousClipboardCopy != "" {
 		// Read current clipboard content (optional, for logging comparison)
 		_, errRead := clipboard.ReadAll()
 		if errRead != nil {
@@ -352,13 +404,15 @@ func (m *Manager) RestoreOriginalClipboard() bool {
 		}
 
 		// Write the stored original content back to the clipboard
-		if err := clipboard.WriteAll(m.previousClipboard); err != nil {
+		if err := clipboard.WriteAll(previousClipboardCopy); err != nil {
 			log.Printf("Failed to restore original clipboard: %v", err)
 			return false
 		}
 
 		log.Println("Original clipboard content restored.")
 
+		// Lock for state updates
+		m.mu.Lock()
 		// Clear the stored original clipboard content
 		originalRestored := m.previousClipboard
 		m.previousClipboard = ""
@@ -369,6 +423,7 @@ func (m *Manager) RestoreOriginalClipboard() bool {
 		// Also clear the diff state as it's no longer relevant to the restored content
 		m.lastOriginalForDiff = ""
 		m.lastModifiedForDiff = ""
+		m.mu.Unlock()
 
 		// Update UI status for revert option
 		if m.onRevertStatusChange != nil {
@@ -382,12 +437,78 @@ func (m *Manager) RestoreOriginalClipboard() bool {
 	return false
 }
 
+// replaceAllStringWithTimeout performs regex replacement with timeout protection
+func replaceAllStringWithTimeout(re *regexp.Regexp, src, repl string, timeoutMs int) (string, error) {
+	type result struct {
+		output string
+		err    error
+	}
+
+	resultCh := make(chan result, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				resultCh <- result{err: fmt.Errorf("panic during regex replacement: %v", r)}
+			}
+		}()
+		output := re.ReplaceAllString(src, repl)
+		resultCh <- result{output: output}
+	}()
+
+	select {
+	case res := <-resultCh:
+		return res.output, res.err
+	case <-ctx.Done():
+		return src, fmt.Errorf("regex replacement timed out after %dms", timeoutMs)
+	}
+}
+
+// replaceAllStringFuncWithTimeout performs regex replacement with a function and timeout protection
+func replaceAllStringFuncWithTimeout(re *regexp.Regexp, src string, repl func(string) string, timeoutMs int) (string, error) {
+	type result struct {
+		output string
+		err    error
+	}
+
+	resultCh := make(chan result, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				resultCh <- result{err: fmt.Errorf("panic during regex replacement: %v", r)}
+			}
+		}()
+		output := re.ReplaceAllStringFunc(src, repl)
+		resultCh <- result{output: output}
+	}()
+
+	select {
+	case res := <-resultCh:
+		return res.output, res.err
+	case <-ctx.Done():
+		return src, fmt.Errorf("regex replacement timed out after %dms", timeoutMs)
+	}
+}
+
 // applyForwardReplacement handles normal regex-based replacements, now resolving secrets.
 // Returns: replaced string, count, error (if secret resolution failed or regex invalid)
 func (m *Manager) applyForwardReplacement(text string, rep config.Replacement) (string, int, error) {
-	// Resolve secrets first using the manager's map
-	resolvedRegex, errRegex := resolvePlaceholders(rep.Regex, m.resolvedSecrets, true)
-	resolvedReplaceWith, errReplace := resolvePlaceholders(rep.ReplaceWith, m.resolvedSecrets, false)
+	// Read secrets map under lock
+	m.mu.RLock()
+	secretsCopy := make(map[string]string, len(m.resolvedSecrets))
+	for k, v := range m.resolvedSecrets {
+		secretsCopy[k] = v
+	}
+	m.mu.RUnlock()
+
+	// Resolve secrets first using the copied map
+	resolvedRegex, errRegex := resolvePlaceholders(rep.Regex, secretsCopy, true)
+	resolvedReplaceWith, errReplace := resolvePlaceholders(rep.ReplaceWith, secretsCopy, false)
 
 	// If either resolution failed, return error immediately
 	if errRegex != nil {
@@ -398,12 +519,12 @@ func (m *Manager) applyForwardReplacement(text string, rep config.Replacement) (
 	}
 
 	// Compile the resolved regex pattern
-	re, err := regexp.Compile(resolvedRegex)
-	if err != nil {
+	re, compileErr := regexp.Compile(resolvedRegex)
+	if compileErr != nil {
 		// Log the specific error
-		log.Printf("Invalid resolved regex '%s' (from original: '%s'): %v", resolvedRegex, rep.Regex, err)
+		log.Printf("Invalid resolved regex '%s' (from original: '%s'): %v", resolvedRegex, rep.Regex, compileErr)
 		// Return an error indicating compilation failure
-		return text, 0, fmt.Errorf("invalid compiled regex from '%s': %w", rep.Regex, err)
+		return text, 0, fmt.Errorf("invalid compiled regex from '%s': %w", rep.Regex, compileErr)
 	}
 
 	// Find all matches to count accurately *before* replacement
@@ -418,17 +539,28 @@ func (m *Manager) applyForwardReplacement(text string, rep config.Replacement) (
 		return text, 0, nil // No matches, no error
 	}
 
+	// Get regex timeout from config
+	m.mu.RLock()
+	timeoutMs := m.config.GetRegexTimeout()
+	m.mu.RUnlock()
+
 	// Apply replacement with or without case preservation using resolvedReplaceWith
 	var result string
+	var err error
 	if rep.PreserveCase {
-		// Use ReplaceAllStringFunc for case preservation
-		result = re.ReplaceAllStringFunc(text, func(match string) string {
-			// Use the resolved replacement string for case preservation
+		// Use ReplaceAllStringFunc for case preservation (with timeout)
+		result, err = replaceAllStringFuncWithTimeout(re, text, func(match string) string {
 			return m.preserveCase(match, resolvedReplaceWith)
-		})
+		}, timeoutMs)
+		if err != nil {
+			return text, 0, fmt.Errorf("case-preserving replacement failed: %w", err)
+		}
 	} else {
-		// Use standard ReplaceAllString
-		result = re.ReplaceAllString(text, resolvedReplaceWith)
+		// Use standard ReplaceAllString with timeout
+		result, err = replaceAllStringWithTimeout(re, text, resolvedReplaceWith, timeoutMs)
+		if err != nil {
+			return text, 0, fmt.Errorf("standard replacement failed: %w", err)
+		}
 	}
 
 	// Only return count > 0 if the text actually changed.
@@ -443,8 +575,16 @@ func (m *Manager) applyForwardReplacement(text string, rep config.Replacement) (
 // applyReverseReplacement handles reverse replacements, now resolving secrets.
 // Returns: replaced string, count, error (if secret resolution failed, source invalid, or regex invalid)
 func (m *Manager) applyReverseReplacement(text string, rep config.Replacement) (string, int, error) {
+	// Read secrets map under lock
+	m.mu.RLock()
+	secretsCopy := make(map[string]string, len(m.resolvedSecrets))
+	for k, v := range m.resolvedSecrets {
+		secretsCopy[k] = v
+	}
+	m.mu.RUnlock()
+
 	// --- Resolve Target Word (from replace_with) ---
-	resolvedTargetWord, errTarget := resolvePlaceholders(rep.ReplaceWith, m.resolvedSecrets, false)
+	resolvedTargetWord, errTarget := resolvePlaceholders(rep.ReplaceWith, secretsCopy, false)
 	if errTarget != nil {
 		return text, 0, fmt.Errorf("failed to resolve placeholders in replace_with for reverse target '%s': %w", rep.ReplaceWith, errTarget)
 	}
@@ -458,7 +598,7 @@ func (m *Manager) applyReverseReplacement(text string, rep config.Replacement) (
 	var errSource error
 	if rep.ReverseWith != "" {
 		// Resolve placeholders in the specified reverse replacement
-		resolvedSourceWord, errSource = resolvePlaceholders(rep.ReverseWith, m.resolvedSecrets, false) // Source word isn't regex usually
+		resolvedSourceWord, errSource = resolvePlaceholders(rep.ReverseWith, secretsCopy, false) // Source word isn't regex usually
 	} else {
 		// Fall back to extracting from the original forward regex
 		rawSourceWord := m.extractFirstAlternative(rep.Regex) // Extract before resolving
@@ -468,7 +608,7 @@ func (m *Manager) applyReverseReplacement(text string, rep config.Replacement) (
 			rawSourceWord = strings.Trim(rawSourceWord, "()")
 		}
 		// Now resolve placeholders in the derived raw source word
-		resolvedSourceWord, errSource = resolvePlaceholders(rawSourceWord, m.resolvedSecrets, false)
+		resolvedSourceWord, errSource = resolvePlaceholders(rawSourceWord, secretsCopy, false)
 
 		// Check if source determination failed or results in empty/same word after resolution
 		if resolvedSourceWord == "" {

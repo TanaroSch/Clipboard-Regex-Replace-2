@@ -62,5 +62,17 @@ var KeyMap = map[string]hotkey.Key{
 	"space":  hotkey.KeySpace,
 	"tab":    hotkey.KeyTab,
 	"enter":  hotkey.KeyReturn,
+	"return": hotkey.KeyReturn,
 	"escape": hotkey.KeyEscape,
+	"esc":    hotkey.KeyEscape,
+
+	// Arrow keys
+	"up":    hotkey.KeyUp,
+	"down":  hotkey.KeyDown,
+	"left":  hotkey.KeyLeft,
+	"right": hotkey.KeyRight,
+
+	// Note: Additional keys like Home, End, Delete, Insert, PageUp, PageDown
+	// and punctuation keys are not available in golang.design/x/hotkey v0.4.1.
+	// Users can still use letter and number keys with modifiers for hotkeys.
 }

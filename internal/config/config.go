@@ -3,9 +3,9 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
+	"regexp"
 	"strings" // Needed for level comparison
 
 	"github.com/99designs/keyring"
@@ -69,7 +69,7 @@ func (c *Config) GetResolvedSecrets() map[string]string {
 func Load(configPath string) (*Config, error) {
 	var config Config
 
-	data, err := ioutil.ReadFile(configPath)
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		// If file not found, try creating default first, then re-read or return error if creation fails
 		if os.IsNotExist(err) {
@@ -78,7 +78,7 @@ func Load(configPath string) (*Config, error) {
 				return nil, fmt.Errorf("config file not found and failed to create default '%s': %w", configPath, createErr)
 			}
 			// Retry reading after creation
-			data, err = ioutil.ReadFile(configPath)
+			data, err = os.ReadFile(configPath)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read config file '%s' even after creating default: %w", configPath, err)
 			}
@@ -154,6 +154,12 @@ func Load(configPath string) (*Config, error) {
 	}
 	// --- End Load Secrets ---
 
+	// --- Validate Configuration ---
+	if err := validateConfig(&config); err != nil {
+		return nil, fmt.Errorf("config validation failed: %w", err)
+	}
+	// --- End Validate Configuration ---
+
 	// Handle backward compatibility - migrate from legacy format to profiles
 	if config.Hotkey != "" && len(config.Replacements) > 0 && len(config.Profiles) == 0 {
 		log.Println("Migrating legacy config format to profiles...")
@@ -201,7 +207,7 @@ func (c *Config) Save() error {
 
 	// Use 0600 permissions for potentially sensitive config file?
 	// 0644 is readable by everyone, 0600 is only owner. Let's use 0600.
-	return ioutil.WriteFile(c.configPath, data, 0600)
+	return os.WriteFile(c.configPath, data, 0600)
 }
 
 // AddSecretReference adds/updates a secret reference in config and stores the value in keyring
@@ -338,11 +344,90 @@ func CreateDefaultConfig(configPath string) error {
 	}
 
 	// Write to file using more restrictive permissions
-	err = ioutil.WriteFile(configPath, data, 0600) // Use 0600 permissions
+	err = os.WriteFile(configPath, data, 0600) // Use 0600 permissions
 	if err != nil {
 		return fmt.Errorf("failed to write default config file '%s': %w", configPath, err)
 	}
 
 	log.Printf("Default configuration file created successfully.")
+	return nil
+}
+
+// validateConfig validates the configuration for common errors
+func validateConfig(cfg *Config) error {
+	var validationErrors []string
+
+	// Validate admin notification level
+	validLevels := map[string]bool{"None": true, "Error": true, "Warn": true, "Info": true}
+	if !validLevels[cfg.AdminNotificationLevel] {
+		validationErrors = append(validationErrors, fmt.Sprintf("invalid AdminNotificationLevel '%s' (must be None, Error, Warn, or Info)", cfg.AdminNotificationLevel))
+	}
+
+	// Validate profiles
+	if cfg.Profiles != nil {
+		profileNames := make(map[string]bool)
+		profileHotkeys := make(map[string][]string) // Track which profiles use which hotkeys
+
+		for i, profile := range cfg.Profiles {
+			profilePrefix := fmt.Sprintf("Profile[%d](%s)", i, profile.Name)
+
+			// Check for empty profile name
+			if strings.TrimSpace(profile.Name) == "" {
+				validationErrors = append(validationErrors, fmt.Sprintf("%s: profile name cannot be empty", profilePrefix))
+			}
+
+			// Check for duplicate profile names
+			if profileNames[profile.Name] {
+				validationErrors = append(validationErrors, fmt.Sprintf("%s: duplicate profile name", profilePrefix))
+			}
+			profileNames[profile.Name] = true
+
+			// Check for empty hotkey
+			if strings.TrimSpace(profile.Hotkey) == "" {
+				validationErrors = append(validationErrors, fmt.Sprintf("%s: hotkey cannot be empty", profilePrefix))
+			} else {
+				// Track hotkey usage
+				profileHotkeys[profile.Hotkey] = append(profileHotkeys[profile.Hotkey], profile.Name)
+			}
+
+			// Validate regex patterns in replacements
+			for j, replacement := range profile.Replacements {
+				rulePrefix := fmt.Sprintf("%s.Replacement[%d]", profilePrefix, j)
+
+				// Validate regex pattern
+				if replacement.Regex != "" {
+					// Try to compile the regex (without resolving placeholders)
+					_, err := regexp.Compile(replacement.Regex)
+					if err != nil {
+						validationErrors = append(validationErrors, fmt.Sprintf("%s: invalid regex '%s': %v", rulePrefix, replacement.Regex, err))
+					}
+				}
+
+				// Validate reverse_with if present
+				if replacement.ReverseWith != "" {
+					// Check if it's a valid regex (if used as regex in reverse mode)
+					_, err := regexp.Compile(replacement.ReverseWith)
+					if err != nil {
+						// It's okay if reverse_with is not a valid regex (it might be a literal string)
+						log.Printf("Note: %s.reverse_with '%s' is not a valid regex pattern (will be treated as literal): %v", rulePrefix, replacement.ReverseWith, err)
+					}
+				}
+			}
+		}
+
+		// Warn about duplicate hotkeys (not an error, just a warning)
+		for hotkey, profiles := range profileHotkeys {
+			if len(profiles) > 1 {
+				log.Printf("Warning: Hotkey '%s' is used by multiple profiles: %v. All matching profiles will be triggered.", hotkey, profiles)
+			}
+		}
+	}
+
+	// Return aggregated errors
+	if len(validationErrors) > 0 {
+		return fmt.Errorf("configuration validation errors:\n  - %s", strings.Join(validationErrors, "\n  - "))
+	}
+
+	log.Println("Configuration validation passed.")
 	return nil
 }

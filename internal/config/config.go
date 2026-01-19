@@ -31,6 +31,12 @@ type Config struct {
 	Profiles               []ProfileConfig   `json:"profiles"`
 	Secrets                map[string]string `json:"secrets,omitempty"` // Maps logical name -> "managed"
 
+	// Performance and behavior settings
+	PasteDelayMs          int `json:"paste_delay_ms,omitempty"`           // Delay before pasting (default: 400ms)
+	RevertDelayMs         int `json:"revert_delay_ms,omitempty"`          // Delay before reverting (default: 300ms)
+	RegexTimeoutMs        int `json:"regex_timeout_ms,omitempty"`         // Timeout for regex operations (default: 5000ms)
+	DiffContextLines      int `json:"diff_context_lines,omitempty"`       // Context lines in diff viewer (default: 3)
+
 	// Legacy support fields (for backward compatibility)
 	Hotkey       string        `json:"hotkey,omitempty"`
 	Replacements []Replacement `json:"replacements,omitempty"`
@@ -51,6 +57,10 @@ type Replacement struct {
 
 const DefaultKeyringService = "Clipboard Regex Replace" // Define AppName constant
 const DefaultAdminNotificationLevel = "Warn"            // Define default level constant
+const DefaultPasteDelayMs = 400                         // Default delay before pasting
+const DefaultRevertDelayMs = 300                        // Default delay before reverting
+const DefaultRegexTimeoutMs = 5000                      // Default regex timeout (5 seconds)
+const DefaultDiffContextLines = 3                       // Default context lines in diff viewer
 
 // GetConfigPath returns the path to the configuration file
 func (c *Config) GetConfigPath() string {
@@ -63,6 +73,38 @@ func (c *Config) GetResolvedSecrets() map[string]string {
 		return make(map[string]string) // Return empty map if nil
 	}
 	return c.resolvedSecrets
+}
+
+// GetPasteDelay returns the configured paste delay or default if not set
+func (c *Config) GetPasteDelay() int {
+	if c.PasteDelayMs <= 0 {
+		return DefaultPasteDelayMs
+	}
+	return c.PasteDelayMs
+}
+
+// GetRevertDelay returns the configured revert delay or default if not set
+func (c *Config) GetRevertDelay() int {
+	if c.RevertDelayMs <= 0 {
+		return DefaultRevertDelayMs
+	}
+	return c.RevertDelayMs
+}
+
+// GetRegexTimeout returns the configured regex timeout or default if not set
+func (c *Config) GetRegexTimeout() int {
+	if c.RegexTimeoutMs <= 0 {
+		return DefaultRegexTimeoutMs
+	}
+	return c.RegexTimeoutMs
+}
+
+// GetDiffContextLines returns the configured diff context lines or default if not set
+func (c *Config) GetDiffContextLines() int {
+	if c.DiffContextLines <= 0 {
+		return DefaultDiffContextLines
+	}
+	return c.DiffContextLines
 }
 
 // Load reads and parses the configuration file with backward compatibility and loads secrets
@@ -310,6 +352,13 @@ func CreateDefaultConfig(configPath string) error {
 		AutomaticReversion:     false,
 		RevertHotkey:           "ctrl+shift+alt+r",      // Changed default revert hotkey
 		Secrets:                make(map[string]string), // Initialize empty secrets map
+
+		// Performance settings (omitted fields will use defaults)
+		PasteDelayMs:     DefaultPasteDelayMs,     // 400ms - delay before pasting
+		RevertDelayMs:    DefaultRevertDelayMs,    // 300ms - delay before reverting
+		RegexTimeoutMs:   DefaultRegexTimeoutMs,   // 5000ms - timeout for regex operations
+		DiffContextLines: DefaultDiffContextLines, // 3 - context lines in diff viewer
+
 		Profiles: []ProfileConfig{
 			{
 				Name:    "General Cleanup",

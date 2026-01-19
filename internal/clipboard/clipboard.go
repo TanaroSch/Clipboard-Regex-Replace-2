@@ -2,6 +2,7 @@
 package clipboard
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -204,9 +205,13 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 	// Read config flags under lock
 	temporaryClipboard := m.config != nil && m.config.TemporaryClipboard
 	automaticReversion := m.config != nil && m.config.AutomaticReversion
+	pasteDelayMs := config.DefaultPasteDelayMs
+	revertDelayMs := config.DefaultRevertDelayMs
 	revertHotkey := ""
 	if m.config != nil {
 		revertHotkey = m.config.RevertHotkey
+		pasteDelayMs = m.config.GetPasteDelay()
+		revertDelayMs = m.config.GetRevertDelay()
 	}
 
 	// --- Temporary clipboard logic ---
@@ -334,7 +339,7 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 		log.Println("Starting paste operation in separate goroutine...")
 
 		// Delay before pasting to allow clipboard system and target app to be ready
-		time.Sleep(400 * time.Millisecond)
+		time.Sleep(time.Duration(pasteDelayMs) * time.Millisecond)
 
 		// Try to paste the content *currently* in the clipboard (which is newText)
 		simulatePlatformPaste() // Call the platform-specific paste function
@@ -343,7 +348,7 @@ func (m *Manager) ProcessClipboard(hotkeyStr string, isReverse bool) (message st
 		// Use captured config flags (no lock needed, these are copies)
 		if temporaryClipboard && automaticReversion && previousClipboardCopy != "" {
 			// Delay *after* paste simulation
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(time.Duration(revertDelayMs) * time.Millisecond)
 
 			// Restore original clipboard
 			if err := clipboard.WriteAll(previousClipboardCopy); err != nil {
@@ -432,6 +437,64 @@ func (m *Manager) RestoreOriginalClipboard() bool {
 	return false
 }
 
+// replaceAllStringWithTimeout performs regex replacement with timeout protection
+func replaceAllStringWithTimeout(re *regexp.Regexp, src, repl string, timeoutMs int) (string, error) {
+	type result struct {
+		output string
+		err    error
+	}
+
+	resultCh := make(chan result, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				resultCh <- result{err: fmt.Errorf("panic during regex replacement: %v", r)}
+			}
+		}()
+		output := re.ReplaceAllString(src, repl)
+		resultCh <- result{output: output}
+	}()
+
+	select {
+	case res := <-resultCh:
+		return res.output, res.err
+	case <-ctx.Done():
+		return src, fmt.Errorf("regex replacement timed out after %dms", timeoutMs)
+	}
+}
+
+// replaceAllStringFuncWithTimeout performs regex replacement with a function and timeout protection
+func replaceAllStringFuncWithTimeout(re *regexp.Regexp, src string, repl func(string) string, timeoutMs int) (string, error) {
+	type result struct {
+		output string
+		err    error
+	}
+
+	resultCh := make(chan result, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				resultCh <- result{err: fmt.Errorf("panic during regex replacement: %v", r)}
+			}
+		}()
+		output := re.ReplaceAllStringFunc(src, repl)
+		resultCh <- result{output: output}
+	}()
+
+	select {
+	case res := <-resultCh:
+		return res.output, res.err
+	case <-ctx.Done():
+		return src, fmt.Errorf("regex replacement timed out after %dms", timeoutMs)
+	}
+}
+
 // applyForwardReplacement handles normal regex-based replacements, now resolving secrets.
 // Returns: replaced string, count, error (if secret resolution failed or regex invalid)
 func (m *Manager) applyForwardReplacement(text string, rep config.Replacement) (string, int, error) {
@@ -456,12 +519,12 @@ func (m *Manager) applyForwardReplacement(text string, rep config.Replacement) (
 	}
 
 	// Compile the resolved regex pattern
-	re, err := regexp.Compile(resolvedRegex)
-	if err != nil {
+	re, compileErr := regexp.Compile(resolvedRegex)
+	if compileErr != nil {
 		// Log the specific error
-		log.Printf("Invalid resolved regex '%s' (from original: '%s'): %v", resolvedRegex, rep.Regex, err)
+		log.Printf("Invalid resolved regex '%s' (from original: '%s'): %v", resolvedRegex, rep.Regex, compileErr)
 		// Return an error indicating compilation failure
-		return text, 0, fmt.Errorf("invalid compiled regex from '%s': %w", rep.Regex, err)
+		return text, 0, fmt.Errorf("invalid compiled regex from '%s': %w", rep.Regex, compileErr)
 	}
 
 	// Find all matches to count accurately *before* replacement
@@ -476,17 +539,28 @@ func (m *Manager) applyForwardReplacement(text string, rep config.Replacement) (
 		return text, 0, nil // No matches, no error
 	}
 
+	// Get regex timeout from config
+	m.mu.RLock()
+	timeoutMs := m.config.GetRegexTimeout()
+	m.mu.RUnlock()
+
 	// Apply replacement with or without case preservation using resolvedReplaceWith
 	var result string
+	var err error
 	if rep.PreserveCase {
-		// Use ReplaceAllStringFunc for case preservation
-		result = re.ReplaceAllStringFunc(text, func(match string) string {
-			// Use the resolved replacement string for case preservation
+		// Use ReplaceAllStringFunc for case preservation (with timeout)
+		result, err = replaceAllStringFuncWithTimeout(re, text, func(match string) string {
 			return m.preserveCase(match, resolvedReplaceWith)
-		})
+		}, timeoutMs)
+		if err != nil {
+			return text, 0, fmt.Errorf("case-preserving replacement failed: %w", err)
+		}
 	} else {
-		// Use standard ReplaceAllString
-		result = re.ReplaceAllString(text, resolvedReplaceWith)
+		// Use standard ReplaceAllString with timeout
+		result, err = replaceAllStringWithTimeout(re, text, resolvedReplaceWith, timeoutMs)
+		if err != nil {
+			return text, 0, fmt.Errorf("standard replacement failed: %w", err)
+		}
 	}
 
 	// Only return count > 0 if the text actually changed.

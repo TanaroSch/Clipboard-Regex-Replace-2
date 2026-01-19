@@ -106,7 +106,8 @@ func (a *Application) onViewLastDiffTriggered() {
 		return
 	}
 	log.Println("View Last Change Details clicked, showing diff viewer.")
-	ui.ShowDiffViewer(original, modified)
+	contextLines := a.config.GetDiffContextLines()
+	ui.ShowDiffViewer(original, modified, contextLines)
 }
 
 // onRevertHotkey is called when the revert hotkey is pressed

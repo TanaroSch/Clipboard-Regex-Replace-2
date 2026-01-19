@@ -144,11 +144,14 @@ func writeDiffLine(builder *strings.Builder, op diffmatchpatch.Operation, origNu
 
 // ShowDiffViewer generates an HTML diff view and opens it in the default browser.
 // (CSS and overall structure remain the same as the previous corrected version)
-func ShowDiffViewer(original, modified string) {
+func ShowDiffViewer(original, modified string, contextLines int) {
 	log.Println("Generating enhanced diff view...")
 	diffs, summary := diffutil.GenerateDiffAndSummary(original, modified)
 
-	contextLines := 3 // Number of unchanged lines to show around a change
+	// Use provided contextLines (or default if <= 0)
+	if contextLines <= 0 {
+		contextLines = 3 // Fallback to default
+	}
 	renderedHtmlDiffContent := renderUnifiedDiffHtml(diffs, contextLines)
 
 	// HTML structure and CSS remain the same as the previous successful unified diff attempt

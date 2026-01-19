@@ -1,4 +1,6 @@
-# Clipboard Regex Replace [![GitHub release (latest by date)](https://img.shields.io/github/v/release/TanaroSch/Clipboard-Regex-Replace-2)](https://github.com/TanaroSch/Clipboard-Regex-Replace-2/releases/latest) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+# <img src="icon.png" width="28" alt="Clipboard Regex Replace icon"> Clipboard Regex Replace [![GitHub release (latest by date)](https://img.shields.io/github/v/release/TanaroSch/Clipboard-Regex-Replace-2)](https://github.com/TanaroSch/Clipboard-Regex-Replace-2/releases/latest) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+Icon (.ico): [internal/resources/icon.ico](internal/resources/icon.ico)
 
 **Instantly transform clipboard text using custom rules and global hotkeys.**
 

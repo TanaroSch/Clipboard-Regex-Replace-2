@@ -4,7 +4,9 @@
 
 Clipboard Regex Replace fully supports Linux distributions with X11 (including Kubuntu). The application uses the same core codebase (~90%) with platform-specific implementations for clipboard, hotkeys, and paste simulation.
 
-**Status**: X11 fully supported | Wayland experimental
+**Status**: X11 fully supported | Wayland partial
+
+**Wayland Note**: Global hotkeys are not yet available on Wayland due to compositor security restrictions. Backend architecture is in place for future XDG Desktop Portal implementation. Clipboard operations, system tray, and secret management all work on Wayland.
 
 ---
 
@@ -12,7 +14,11 @@ Clipboard Regex Replace fully supports Linux distributions with X11 (including K
 
 ### Supported Environments
 - **X11 (X Window System)**: ✅ Fully supported
-- **Wayland**: ⚠️ Experimental (clipboard works, hotkeys may be limited)
+- **Wayland**: ⚠️ Partial support
+  - ✅ Clipboard operations work
+  - ✅ System tray works
+  - ✅ Secret management works
+  - ❌ Global hotkeys not yet available (backend architecture ready for future XDG Portal implementation)
 
 ### Tested Distributions
 - Kubuntu 22.04+ (KDE Plasma)

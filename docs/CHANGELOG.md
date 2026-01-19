@@ -1,5 +1,31 @@
 ## Changelog
 
+### Unreleased (feature/linux-kubuntu-support branch)
+
+*   **Feature: Linux X11 Support (Kubuntu/Ubuntu):**
+    *   Added full support for Linux distributions with X11 display server.
+    *   Verified all dependencies work on Linux (clipboard, hotkeys, system tray, secrets).
+    *   Created comprehensive Linux setup guide ([docs/LINUX_SUPPORT.md](LINUX_SUPPORT.md)).
+    *   Updated README with Linux quick start instructions.
+    *   Requires: `libx11-dev`, `xclip/xsel`, `xdotool`, `xdg-utils`.
+    *   Platform Support: ✅ Windows | ✅ macOS | ✅ Linux X11 | ⚠️ Linux Wayland (partial)
+
+*   **Architecture: Hybrid Hotkey Backend System:**
+    *   Introduced backend abstraction layer for hotkey registration.
+    *   **Zero breaking changes** - existing Windows and X11 functionality preserved exactly as-is.
+    *   Runtime display server detection (Windows/X11/Wayland).
+    *   Legacy backend wraps existing `golang.design/x/hotkey` library (Windows, macOS, X11).
+    *   Portal backend stub prepared for future Wayland support via XDG Desktop Portal.
+    *   Graceful degradation: On Wayland, clipboard operations work even without hotkey support.
+    *   New files: `backend.go`, `backend_legacy.go`, `backend_portal.go`, `detect.go`.
+
+*   **Platform Behavior:**
+    *   **Windows**: Uses legacy backend, all features work (no changes).
+    *   **X11 (Linux/macOS)**: Uses legacy backend, all features work.
+    *   **Wayland**: Clipboard operations work, hotkeys currently unavailable (future Portal implementation planned).
+
+*   **Note:** Backend architecture is ready but NOT yet integrated into Manager. Existing hotkey code paths remain unchanged. Version number TBD when merged to main.
+
 ### 1.7.3 (Current Version)
 
 *   **Enhancement: Diff Viewer Improvements:**

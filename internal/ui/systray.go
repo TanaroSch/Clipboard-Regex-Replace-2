@@ -7,17 +7,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	//"regexp" // <-- Import regexp
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/getlantern/systray"
 	"github.com/TanaroSch/clipboard-regex-replace/internal/config"
-	// *** Ensure golang.org/x/term is NOT imported if no longer used ***
 )
 
 // SystrayManager handles the system tray icon and menu
 type SystrayManager struct {
+	mu               sync.RWMutex // Protects config and profileMenuItems
 	config           *config.Config
 	version          string
 	onReloadConfig   func()
@@ -73,6 +73,9 @@ func NewSystrayManager(
 // UpdateConfig updates the configuration used by the systray manager
 // and adjusts relevant UI elements like Revert status and Profile checkmarks.
 func (s *SystrayManager) UpdateConfig(newCfg *config.Config) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	log.Println("SystrayManager: Updating config reference.")
 	s.config = newCfg // Update internal reference
 
@@ -327,42 +330,62 @@ func (s *SystrayManager) updateProfileMenuItems() {
 			s.profileMenuItems[profileIndex] = menuItem
 
 			go func(item *systray.MenuItem, idx int) {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("RECOVERED FROM PANIC IN PROFILE TOGGLE HANDLER (index %d): %v", idx, r)
+					}
+				}()
+
 				for range item.ClickedCh {
-					// --- Safely access config and profile ---
+					// --- Safely access config and profile under lock ---
+					s.mu.Lock()
 					if s.config == nil || s.config.Profiles == nil || idx >= len(s.config.Profiles) {
+						s.mu.Unlock()
 						errMsg := "Profile list changed unexpectedly. Please use Reload or Restart."
 						log.Printf("Error: Profile index %d out of bounds or config nil after config change. Cannot toggle.", idx)
-						ShowAdminNotification(LevelWarn, "Menu Inconsistency", errMsg) // <<< CHANGED (Warn Level)
+						ShowAdminNotification(LevelWarn, "Menu Inconsistency", errMsg)
 						continue
 					}
 					p := &s.config.Profiles[idx] // Get pointer to modify directly
 
 					// --- Toggle State ---
 					p.Enabled = !p.Enabled
-					log.Printf("Toggled profile '%s' to enabled=%t", p.Name, p.Enabled)
+					profileName := p.Name
+					profileEnabled := p.Enabled
+					log.Printf("Toggled profile '%s' to enabled=%t", profileName, profileEnabled)
 
 					// --- Update Menu Item Visual ---
-					newText := "  " + p.Name
-					if p.Enabled {
-						newText = "✓ " + p.Name
+					newText := "  " + profileName
+					if profileEnabled {
+						newText = "✓ " + profileName
 					}
 					item.SetTitle(newText)
 
 					// --- Save Config ---
-					if err := s.config.Save(); err != nil {
-						errMsg := fmt.Sprintf("Failed to save config after toggling '%s'. Error: %v", p.Name, err)
-						log.Printf("Failed to save config after toggling profile '%s': %v", p.Name, err)
-						ShowAdminNotification(LevelError, "Save Error", errMsg) // <<< CHANGED (Error Level)
-						// Optionally attempt to revert in-memory state
-						p.Enabled = !p.Enabled
-						newText = "  " + p.Name
-						if p.Enabled { newText = "✓ " + p.Name }
-						item.SetTitle(newText)
+					err := s.config.Save()
+					s.mu.Unlock()
+
+					if err != nil {
+						errMsg := fmt.Sprintf("Failed to save config after toggling '%s'. Error: %v", profileName, err)
+						log.Printf("Failed to save config after toggling profile '%s': %v", profileName, err)
+						ShowAdminNotification(LevelError, "Save Error", errMsg)
+
+						// Revert in-memory state
+						s.mu.Lock()
+						if idx < len(s.config.Profiles) {
+							s.config.Profiles[idx].Enabled = !profileEnabled
+							revertedText := "  " + profileName
+							if !profileEnabled {
+								revertedText = "✓ " + profileName
+							}
+							item.SetTitle(revertedText)
+						}
+						s.mu.Unlock()
 					} else {
 						// --- Notify & Reload ---
-						status := map[bool]string{true: "enabled", false: "disabled"}[p.Enabled]
-						msg := fmt.Sprintf("Profile '%s' has been %s. Reloading...", p.Name, status)
-						ShowAdminNotification(LevelInfo, "Profile Updated", msg) // <<< CHANGED (Info Level)
+						status := map[bool]string{true: "enabled", false: "disabled"}[profileEnabled]
+						msg := fmt.Sprintf("Profile '%s' has been %s. Reloading...", profileName, status)
+						ShowAdminNotification(LevelInfo, "Profile Updated", msg)
 						if s.onReloadConfig != nil {
 							log.Println("Triggering internal config reload after profile toggle to update hotkeys.")
 							// Slight delay to allow notification to potentially show first
@@ -382,13 +405,23 @@ func (s *SystrayManager) updateProfileMenuItems() {
 	sepItem.Disable()
 	miAddProfile := miProfiles.AddSubMenuItem("➕ Add New Profile", "Adds a template profile to config.json (Restart Recommended)")
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("RECOVERED FROM PANIC IN ADD PROFILE HANDLER: %v", r)
+			}
+		}()
+
 		for range miAddProfile.ClickedCh {
 			log.Println("'Add New Profile' clicked.")
+
+			s.mu.Lock()
 			if s.config == nil {
+				s.mu.Unlock()
 				log.Println("Error: Cannot add profile, config is nil.")
-				ShowAdminNotification(LevelError, "Internal Error", "Application configuration not loaded.") // <<< CHANGED (Error Level)
+				ShowAdminNotification(LevelError, "Internal Error", "Application configuration not loaded.")
 				continue
 			}
+
 			// Ensure unique name generation remains robust even with frequent additions
 			baseName := "New_Profile"
 			existingNames := make(map[string]bool)
@@ -417,18 +450,25 @@ func (s *SystrayManager) updateProfileMenuItems() {
 				},
 			}
 			s.config.Profiles = append(s.config.Profiles, newProfile)
-			if err := s.config.Save(); err != nil {
+
+			err := s.config.Save()
+			s.mu.Unlock()
+
+			if err != nil {
 				errMsg := fmt.Sprintf("Failed to save updated config file. Error: %v", err)
 				log.Printf("Failed to save config after adding new profile template: %v", err)
-				ShowAdminNotification(LevelError, "Error Adding Profile", errMsg) // <<< CHANGED (Error Level)
+				ShowAdminNotification(LevelError, "Error Adding Profile", errMsg)
+
 				// Roll back in-memory change on save failure
+				s.mu.Lock()
 				if len(s.config.Profiles) > 0 {
 					s.config.Profiles = s.config.Profiles[:len(s.config.Profiles)-1]
 				}
+				s.mu.Unlock()
 			} else {
 				msg := fmt.Sprintf("Template '%s' added. Edit config.json and use 'Reload' or 'Restart Application'.", newProfile.Name)
 				log.Printf("Added new profile template '%s' and saved config.", newProfile.Name)
-				ShowAdminNotification(LevelInfo, "Profile Template Added", msg) // <<< CHANGED (Info Level)
+				ShowAdminNotification(LevelInfo, "Profile Template Added", msg)
 				// Note: The menu won't update automatically without a restart or explicit refresh logic
 			}
 		}

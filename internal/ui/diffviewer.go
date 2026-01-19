@@ -6,9 +6,7 @@ import (
 	"html"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -133,14 +131,12 @@ func writeDiffLine(builder *strings.Builder, op diffmatchpatch.Operation, origNu
 		contentToRender = " \n"
 	}
 
-
 	// Render the line as a div
 	builder.WriteString(fmt.Sprintf(
 		"<div class=\"line %s\"><span class=\"line-num orig-num\">%s</span><span class=\"line-num mod-num\">%s</span><span class=\"line-op\">%s</span><span class=\"line-content\">%s</span></div>",
 		lineClass, origNumStr, modNumStr, opChar, contentToRender,
 	))
 }
-
 
 // ShowDiffViewer generates an HTML diff view and opens it in the default browser.
 // (CSS and overall structure remain the same as the previous corrected version)
@@ -321,57 +317,4 @@ func ShowDiffViewer(original, modified string, contextLines int) {
 			log.Printf("Attempted deletion of temporary diff file: %s", pathToDelete)
 		}
 	}(absPath)
-}
-
-
-// OpenFileInDefaultApp remains the same
-func OpenFileInDefaultApp(filePath string) error {
-	log.Printf("Executing OpenFileInDefaultApp for path: %s on OS: %s", filePath, runtime.GOOS)
-	switch runtime.GOOS {
-	case "windows":
-		log.Println("Windows: Attempting method: ShellExecuteW API")
-		err := windowsOpenFileInDefaultApp(filePath)
-		if err == nil {
-			log.Println("Windows Method (ShellExecuteW) succeeded.")
-		} else {
-			log.Printf("Windows Method (ShellExecuteW) failed: %v", err)
-		}
-		return err
-	case "darwin":
-		cmd := exec.Command("open", filePath)
-		log.Printf("macOS - Executing: %s %v", cmd.Path, cmd.Args)
-		err := cmd.Start()
-		if err != nil {
-			log.Printf("Failed to start command (%s): %v", cmd.String(), err)
-			return fmt.Errorf("failed to start command (%s): %w", cmd.String(), err)
-		}
-		log.Printf("Successfully started command for %s", runtime.GOOS)
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("RECOVERED FROM PANIC IN MACOS CMD WAIT: %v", r)
-				}
-			}()
-			_ = cmd.Wait()
-		}()
-		return nil
-	default: // Assume Linux or other Unix-like systems
-		cmd := exec.Command("xdg-open", filePath)
-		log.Printf("Linux/Other - Executing: %s %v", cmd.Path, cmd.Args)
-		err := cmd.Start()
-		if err != nil {
-			log.Printf("Failed to start command (%s): %v", cmd.String(), err)
-			return fmt.Errorf("failed to start command (%s): %w", cmd.String(), err)
-		}
-		log.Printf("Successfully started command for %s", runtime.GOOS)
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("RECOVERED FROM PANIC IN LINUX CMD WAIT: %v", r)
-				}
-			}()
-			_ = cmd.Wait()
-		}()
-		return nil
-	}
 }

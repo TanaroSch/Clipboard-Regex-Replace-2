@@ -1,6 +1,10 @@
 ## Changelog
 
-### Unreleased (feature/linux-kubuntu-support branch)
+### Unreleased
+
+*   (No entries yet)
+
+### 1.8.0
 
 *   **Feature: Linux X11 Support (Kubuntu/Ubuntu):**
     *   Added full support for Linux distributions with X11 display server.
@@ -24,7 +28,10 @@
     *   **X11 (Linux/macOS)**: Uses legacy backend, all features work.
     *   **Wayland**: Clipboard operations work, hotkeys currently unavailable (future Portal implementation planned).
 
-*   **Note:** Backend architecture is ready but NOT yet integrated into Manager. Existing hotkey code paths remain unchanged. Version number TBD when merged to main.
+*   **Fix: Linux Build + Hotkey Reliability:**
+    *   Fixed Linux build failures caused by Windows-only notification and file-opening code paths by splitting OS-specific implementations via build tags.
+    *   Fixed Linux hotkeys not firing under common modifier states (e.g., NumLock/CapsLock) by registering and listening on common X11 modifier variants.
+    *   Windows behavior remains unchanged.
 
 ### 1.7.3 (Current Version)
 

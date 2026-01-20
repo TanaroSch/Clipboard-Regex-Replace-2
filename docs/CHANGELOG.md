@@ -4,6 +4,19 @@
 
 *   (No entries yet)
 
+### 1.8.1
+
+*   **Enhancement: Improved Diff Viewer:**
+    *   Replaced line-based diffing with **character-level inline highlighting** for precise change visualization.
+    *   Added **word-based diffing as default** for better readability of typical text changes.
+    *   Implemented **toggle button** to switch between word-based and character-based diff modes.
+    *   Added **collapsible unchanged sections** that are collapsed by default (click to expand).
+    *   Shows line number ranges for collapsed sections (e.g., "15-45").
+    *   Removed and inserted characters are now highlighted inline with red (strikethrough) and green backgrounds.
+    *   Modified lines show yellow background with precise inline highlighting.
+    *   Updated summary to show "Lines Changed" separately from insertions/deletions.
+    *   GitHub-style visual design for professional diff presentation.
+
 ### 1.8.0
 
 *   **Feature: Linux X11 Support (Kubuntu/Ubuntu):**

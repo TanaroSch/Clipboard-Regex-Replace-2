@@ -12,7 +12,7 @@ import (
 	"github.com/TanaroSch/clipboard-regex-replace/internal/resources"
 )
 
-const version = "v1.8.0"
+const version = "v1.8.1"
 
 func main() {
 	// Configure logging maybe? (e.g., write to file)

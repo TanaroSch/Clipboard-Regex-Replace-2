@@ -197,13 +197,19 @@ func renderInlineContent(diffs []diffmatchpatch.Diff) string {
 // ShowDiffViewer generates an HTML diff view and opens it in the default browser.
 func ShowDiffViewer(original, modified string, contextLines int) {
 	log.Println("Generating enhanced diff view...")
-	lines, summary := diffutil.GenerateDiffAndSummary(original, modified)
 
 	// Use provided contextLines (or default if <= 0)
 	if contextLines <= 0 {
 		contextLines = 3 // Fallback to default
 	}
-	renderedHtmlDiffContent := renderInlineDiffHtml(lines, contextLines)
+
+	// Generate both word-based and character-based diffs
+	wordLines, wordSummary := diffutil.GenerateDiffAndSummary(original, modified)
+	charLines, charSummary := diffutil.GenerateCharDiffAndSummary(original, modified)
+
+	// Render both versions
+	wordDiffHtml := renderInlineDiffHtml(wordLines, contextLines)
+	charDiffHtml := renderInlineDiffHtml(charLines, contextLines)
 
 	htmlContent := `
 <!DOCTYPE html>
@@ -394,20 +400,113 @@ func ShowDiffViewer(original, modified string, contextLines int) {
         .line.foldable:not(.collapsed) .fold-text::after {
             content: " ▼";
         }
+        /* Toggle button styling */
+        .diff-mode-toggle {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f6f8fa;
+            border: 1px solid #d1d5da;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .toggle-label {
+            font-weight: 600;
+            color: #24292e;
+        }
+        .toggle-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        .toggle-btn {
+            padding: 8px 16px;
+            border: 1px solid #d1d5da;
+            background-color: #ffffff;
+            color: #24292e;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .toggle-btn:hover {
+            background-color: #f6f8fa;
+            border-color: #0366d6;
+        }
+        .toggle-btn.active {
+            background-color: #0366d6;
+            color: #ffffff;
+            border-color: #0366d6;
+        }
+        .diff-view {
+            display: none;
+        }
+        .diff-view.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
     <h1>Clipboard Change Details</h1>
+
+    <div class="diff-mode-toggle">
+        <span class="toggle-label">Diff Mode:</span>
+        <div class="toggle-buttons">
+            <button class="toggle-btn active" onclick="switchMode('word')">Word-based (Default)</button>
+            <button class="toggle-btn" onclick="switchMode('char')">Character-based</button>
+        </div>
+        <span style="color: #57606a; font-size: 13px; margin-left: auto;">
+            Word-based is easier to read; character-based shows exact changes
+        </span>
+    </div>
+
     <h2>Summary</h2>
-    <pre class="summary">%s</pre>
+    <div id="word-summary" class="diff-view active">
+        <pre class="summary">%s</pre>
+    </div>
+    <div id="char-summary" class="diff-view">
+        <pre class="summary">%s</pre>
+    </div>
+
     <h2>Detailed Diff</h2>
-    %s
+    <div id="word-diff" class="diff-view active">
+        %s
+    </div>
+    <div id="char-diff" class="diff-view">
+        %s
+    </div>
+
+    <script>
+        function switchMode(mode) {
+            // Update button states
+            document.querySelectorAll('.toggle-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Show/hide appropriate diff views
+            if (mode === 'word') {
+                document.getElementById('word-summary').classList.add('active');
+                document.getElementById('char-summary').classList.remove('active');
+                document.getElementById('word-diff').classList.add('active');
+                document.getElementById('char-diff').classList.remove('active');
+            } else {
+                document.getElementById('word-summary').classList.remove('active');
+                document.getElementById('char-summary').classList.add('active');
+                document.getElementById('word-diff').classList.remove('active');
+                document.getElementById('char-diff').classList.add('active');
+            }
+        }
+    </script>
 </body>
 </html>
 `
 	fullHtml := fmt.Sprintf(htmlContent,
-		html.EscapeString(summary),
-		renderedHtmlDiffContent,
+		html.EscapeString(wordSummary),
+		html.EscapeString(charSummary),
+		wordDiffHtml,
+		charDiffHtml,
 	)
 
 	// Create temporary file and open in browser

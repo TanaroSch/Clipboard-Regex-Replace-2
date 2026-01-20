@@ -18,13 +18,124 @@ type DiffLine struct {
 	InlineDiffs  []diffmatchpatch.Diff    // Character-level diffs within this line
 }
 
-// GenerateDiffAndSummary builds a character-level diff organized by lines with a short summary.
+// computeWordLevelDiff performs word-based diffing for better readability.
+// This approach computes character-level diffs first, then merges consecutive
+// character changes within word boundaries into larger chunks.
+func computeWordLevelDiff(dmp *diffmatchpatch.DiffMatchPatch, original, modified string) []diffmatchpatch.Diff {
+	// Start with character-level diff
+	charDiffs := dmp.DiffMain(original, modified, true)
+
+	// Merge small character-level changes into word-level changes
+	var result []diffmatchpatch.Diff
+	var buffer []diffmatchpatch.Diff
+
+	for i, diff := range charDiffs {
+		buffer = append(buffer, diff)
+
+		// Check if we should flush the buffer
+		shouldFlush := false
+
+		if diff.Type == diffmatchpatch.DiffEqual {
+			// Check if this equal segment contains word boundaries
+			if containsWordBoundary(diff.Text) {
+				shouldFlush = true
+			}
+		}
+
+		// Also flush at the end
+		if i == len(charDiffs)-1 {
+			shouldFlush = true
+		}
+
+		if shouldFlush && len(buffer) > 0 {
+			// Merge buffer into a single set of diffs
+			merged := mergeBuffer(buffer)
+			result = append(result, merged...)
+			buffer = nil
+		}
+	}
+
+	return result
+}
+
+// containsWordBoundary checks if text contains spaces, newlines, or other word separators.
+func containsWordBoundary(text string) bool {
+	for _, ch := range text {
+		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeBuffer merges a sequence of diffs, grouping consecutive operations together.
+func mergeBuffer(buffer []diffmatchpatch.Diff) []diffmatchpatch.Diff {
+	if len(buffer) == 0 {
+		return nil
+	}
+
+	var result []diffmatchpatch.Diff
+	var currentType diffmatchpatch.Operation
+	var currentText strings.Builder
+
+	for _, diff := range buffer {
+		if currentText.Len() == 0 {
+			// Start new segment
+			currentType = diff.Type
+			currentText.WriteString(diff.Text)
+		} else if diff.Type == currentType {
+			// Continue current segment
+			currentText.WriteString(diff.Text)
+		} else {
+			// Flush current segment and start new one
+			if currentText.Len() > 0 {
+				result = append(result, diffmatchpatch.Diff{
+					Type: currentType,
+					Text: currentText.String(),
+				})
+			}
+			currentType = diff.Type
+			currentText.Reset()
+			currentText.WriteString(diff.Text)
+		}
+	}
+
+	// Flush final segment
+	if currentText.Len() > 0 {
+		result = append(result, diffmatchpatch.Diff{
+			Type: currentType,
+			Text: currentText.String(),
+		})
+	}
+
+	return result
+}
+
+// GenerateDiffAndSummary builds a word-level diff organized by lines with a short summary.
+// Word-level diffing is more readable for most text changes.
 func GenerateDiffAndSummary(original, modified string) (lines []DiffLine, summary string) {
+	return generateDiffAndSummaryWithMode(original, modified, false)
+}
+
+// GenerateCharDiffAndSummary builds a character-level diff organized by lines with a short summary.
+// Character-level diffing shows exact character changes.
+func GenerateCharDiffAndSummary(original, modified string) (lines []DiffLine, summary string) {
+	return generateDiffAndSummaryWithMode(original, modified, true)
+}
+
+// generateDiffAndSummaryWithMode is the internal implementation that supports both word and character modes.
+func generateDiffAndSummaryWithMode(original, modified string, useCharMode bool) (lines []DiffLine, summary string) {
 	dmp := diffmatchpatch.New()
 	dmp.DiffTimeout = 5 * time.Second
 
-	// Perform character-level diff
-	diffs := dmp.DiffMain(original, modified, true)
+	var diffs []diffmatchpatch.Diff
+	if useCharMode {
+		// Character-level diff
+		diffs = dmp.DiffMain(original, modified, true)
+	} else {
+		// Word-level diff (default)
+		diffs = computeWordLevelDiff(dmp, original, modified)
+	}
 	dmp.DiffCleanupSemantic(diffs)
 
 	// Convert character-level diffs to line-based structure

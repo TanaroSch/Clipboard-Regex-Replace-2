@@ -4,7 +4,7 @@
 
 **Clipboard Regex Replace** is a lightweight, cross-platform Go application that automates text transformations on clipboard content. It runs in the system tray, monitors for global hotkeys, and applies predefined regex rules to clipboard text with secure secret management.
 
-**Version:** v1.8.0
+**Version:** v1.8.1
 **Language:** Go 1.23.6
 **License:** MIT
 **Platforms:** Windows, macOS, Linux X11 (Kubuntu/Ubuntu fully supported)

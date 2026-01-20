@@ -14,89 +14,121 @@ import (
 	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
-// renderUnifiedDiffHtml generates a unified diff view in HTML format,
-// including line numbers and static context folding.
-func renderUnifiedDiffHtml(diffs []diffmatchpatch.Diff, contextLines int) string {
+// renderInlineDiffHtml generates a unified diff view with character-level inline highlighting.
+func renderInlineDiffHtml(lines []diffutil.DiffLine, contextLines int) string {
 	var builder strings.Builder
-	origLineNum := 1
-	modLineNum := 1
-	// Minimum number of equal lines required *in the middle* to trigger folding.
-	foldThreshold := (contextLines * 2) + 1 // e.g., 3 context + 1 hidden + 3 context = 7
+	foldThreshold := (contextLines * 2) + 1 // Minimum unchanged lines to trigger folding
 
-	builder.WriteString(`<pre class="diff-output">`) // Use <pre> for better whitespace handling
+	builder.WriteString(`<div class="diff-container">`)
 
-	for _, diff := range diffs {
-		// Split the segment's text into lines, keeping the newline separators
-		segmentLines := strings.SplitAfter(diff.Text, "\n")
-		// Remove the potentially empty string after the last newline
-		if len(segmentLines) > 0 && segmentLines[len(segmentLines)-1] == "" {
-			segmentLines = segmentLines[:len(segmentLines)-1]
-		}
+	// Group consecutive unchanged lines for folding
+	var unchangedGroup []diffutil.DiffLine
 
-		switch diff.Type {
-		case diffmatchpatch.DiffEqual:
-			if len(segmentLines) >= foldThreshold { // Check if this *entire equal block* is foldable
-				// --- Render Folded Block ---
-				// 1. Render first 'contextLines'
-				for j := 0; j < contextLines; j++ {
-					writeDiffLine(&builder, diff.Type, origLineNum, modLineNum, segmentLines[j])
-					origLineNum++
-					modLineNum++
-				}
+	for i, line := range lines {
+		isUnchanged := line.Type == diffmatchpatch.DiffEqual && !hasInlineChanges(line)
 
-				// 2. Render fold marker
-				skippedLines := len(segmentLines) - (contextLines * 2)
-				builder.WriteString(fmt.Sprintf(
-					"<div class=\"line foldable\"><span class=\"line-num\">...</span><span class=\"line-num\">...</span><span class=\"line-op\"> </span><span class=\"line-content\">%d lines hidden</span></div>",
-					skippedLines))
-				origLineNum += skippedLines
-				modLineNum += skippedLines
+		if isUnchanged {
+			unchangedGroup = append(unchangedGroup, line)
 
-				// 3. Render last 'contextLines'
-				for j := len(segmentLines) - contextLines; j < len(segmentLines); j++ {
-					writeDiffLine(&builder, diff.Type, origLineNum, modLineNum, segmentLines[j])
-					origLineNum++
-					modLineNum++
-				}
-			} else {
-				// --- Render Unfolded Equal Block ---
-				for _, line := range segmentLines {
-					// Only render if the line is not empty (handles potential edge cases)
-					if line != "" {
-						writeDiffLine(&builder, diff.Type, origLineNum, modLineNum, line)
-						origLineNum++
-						modLineNum++
+			// Check if this is the last line or next line is changed
+			isLast := i == len(lines)-1
+			nextIsChanged := !isLast && (lines[i+1].Type != diffmatchpatch.DiffEqual || hasInlineChanges(lines[i+1]))
+
+			if isLast || nextIsChanged {
+				// Process the accumulated unchanged group
+				if len(unchangedGroup) >= foldThreshold {
+					renderFoldableGroup(&builder, unchangedGroup, contextLines)
+				} else {
+					// Render all lines without folding
+					for _, uLine := range unchangedGroup {
+						renderDiffLine(&builder, uLine)
 					}
 				}
+				unchangedGroup = nil
 			}
-		case diffmatchpatch.DiffDelete:
-			for _, line := range segmentLines {
-				if line != "" {
-					writeDiffLine(&builder, diff.Type, origLineNum, 0, line) // 0 for modLineNum
-					origLineNum++
+		} else {
+			// Changed line - flush any accumulated unchanged lines first
+			if len(unchangedGroup) > 0 {
+				if len(unchangedGroup) >= foldThreshold {
+					renderFoldableGroup(&builder, unchangedGroup, contextLines)
+				} else {
+					for _, uLine := range unchangedGroup {
+						renderDiffLine(&builder, uLine)
+					}
 				}
+				unchangedGroup = nil
 			}
-		case diffmatchpatch.DiffInsert:
-			for _, line := range segmentLines {
-				if line != "" {
-					writeDiffLine(&builder, diff.Type, 0, modLineNum, line) // 0 for origLineNum
-					modLineNum++
-				}
-			}
+
+			// Render the changed line
+			renderDiffLine(&builder, line)
 		}
 	}
 
-	builder.WriteString(`</pre>`)
+	builder.WriteString(`</div>`)
 	return builder.String()
 }
 
-// writeDiffLine formats and writes a single line of the diff to the builder.
-// It now handles the line number formatting and content escaping.
-func writeDiffLine(builder *strings.Builder, op diffmatchpatch.Operation, origNum, modNum int, lineText string) {
-	lineClass := ""
-	opChar := " " // Default op character for equal lines
+// hasInlineChanges checks if a line has character-level changes.
+func hasInlineChanges(line diffutil.DiffLine) bool {
+	for _, d := range line.InlineDiffs {
+		if d.Type != diffmatchpatch.DiffEqual {
+			return true
+		}
+	}
+	return false
+}
 
-	switch op {
+// renderFoldableGroup renders a group of unchanged lines with folding capability.
+func renderFoldableGroup(builder *strings.Builder, group []diffutil.DiffLine, contextLines int) {
+	// Render first contextLines
+	for i := 0; i < contextLines && i < len(group); i++ {
+		renderDiffLine(builder, group[i])
+	}
+
+	// Render fold marker
+	skippedCount := len(group) - (contextLines * 2)
+	if skippedCount > 0 {
+		firstHidden := group[contextLines].OrigLineNum
+		lastHidden := group[len(group)-contextLines-1].OrigLineNum
+
+		builder.WriteString(fmt.Sprintf(
+			`<div class="line foldable collapsed" onclick="this.classList.toggle('collapsed')">
+				<span class="line-num">%d-%d</span>
+				<span class="line-num">%d-%d</span>
+				<span class="line-op">⋮</span>
+				<span class="line-content fold-indicator">
+					<span class="fold-text">%d unchanged lines (click to expand)</span>
+				</span>
+			</div>`,
+			firstHidden, lastHidden,
+			firstHidden, lastHidden,
+			skippedCount,
+		))
+
+		// Hidden lines (wrapped in collapsible container)
+		builder.WriteString(`<div class="fold-content">`)
+		for i := contextLines; i < len(group)-contextLines; i++ {
+			renderDiffLine(builder, group[i])
+		}
+		builder.WriteString(`</div>`)
+	}
+
+	// Render last contextLines
+	startIdx := len(group) - contextLines
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	for i := startIdx; i < len(group); i++ {
+		renderDiffLine(builder, group[i])
+	}
+}
+
+// renderDiffLine renders a single line with inline character-level highlighting.
+func renderDiffLine(builder *strings.Builder, line diffutil.DiffLine) {
+	lineClass := ""
+	opChar := " "
+
+	switch line.Type {
 	case diffmatchpatch.DiffDelete:
 		lineClass = "diff-delete"
 		opChar = "-"
@@ -104,53 +136,75 @@ func writeDiffLine(builder *strings.Builder, op diffmatchpatch.Operation, origNu
 		lineClass = "diff-insert"
 		opChar = "+"
 	case diffmatchpatch.DiffEqual:
-		lineClass = "diff-equal"
+		if hasInlineChanges(line) {
+			lineClass = "diff-modified"
+			opChar = "~"
+		} else {
+			lineClass = "diff-equal"
+			opChar = " "
+		}
 	}
 
 	origNumStr := ""
-	if origNum > 0 {
-		origNumStr = fmt.Sprintf("%d", origNum)
+	if line.OrigLineNum > 0 {
+		origNumStr = fmt.Sprintf("%d", line.OrigLineNum)
 	}
 	modNumStr := ""
-	if modNum > 0 {
-		modNumStr = fmt.Sprintf("%d", modNum)
+	if line.ModLineNum > 0 {
+		modNumStr = fmt.Sprintf("%d", line.ModLineNum)
 	}
 
-	// Escape content and handle spaces for <pre> context
-	escapedLine := html.EscapeString(lineText)
-	// Preserve spaces by replacing them with  , but handle potential trailing newline
-	endsWithNewline := strings.HasSuffix(escapedLine, "\n")
-	contentToRender := escapedLine
-	if endsWithNewline {
-		contentToRender = strings.ReplaceAll(escapedLine[:len(escapedLine)-1], " ", " ") + "\n"
-	} else {
-		contentToRender = strings.ReplaceAll(escapedLine, " ", " ")
-	}
-	// If the content is just a newline, render it as such to maintain line height
-	if contentToRender == "\n" {
-		contentToRender = " \n"
-	}
+	// Render inline diffs with character-level highlighting
+	contentHtml := renderInlineContent(line.InlineDiffs)
 
-	// Render the line as a div
 	builder.WriteString(fmt.Sprintf(
-		"<div class=\"line %s\"><span class=\"line-num orig-num\">%s</span><span class=\"line-num mod-num\">%s</span><span class=\"line-op\">%s</span><span class=\"line-content\">%s</span></div>",
-		lineClass, origNumStr, modNumStr, opChar, contentToRender,
+		`<div class="line %s">
+			<span class="line-num orig-num">%s</span>
+			<span class="line-num mod-num">%s</span>
+			<span class="line-op">%s</span>
+			<span class="line-content">%s</span>
+		</div>`,
+		lineClass, origNumStr, modNumStr, opChar, contentHtml,
 	))
 }
 
+// renderInlineContent renders character-level diffs within a line.
+func renderInlineContent(diffs []diffmatchpatch.Diff) string {
+	var builder strings.Builder
+
+	for _, diff := range diffs {
+		escapedText := html.EscapeString(diff.Text)
+
+		// Replace spaces with non-breaking spaces for better rendering
+		escapedText = strings.ReplaceAll(escapedText, " ", "&nbsp;")
+
+		// Preserve newlines
+		escapedText = strings.ReplaceAll(escapedText, "\n", "")
+
+		switch diff.Type {
+		case diffmatchpatch.DiffEqual:
+			builder.WriteString(escapedText)
+		case diffmatchpatch.DiffDelete:
+			builder.WriteString(fmt.Sprintf(`<span class="char-delete">%s</span>`, escapedText))
+		case diffmatchpatch.DiffInsert:
+			builder.WriteString(fmt.Sprintf(`<span class="char-insert">%s</span>`, escapedText))
+		}
+	}
+
+	return builder.String()
+}
+
 // ShowDiffViewer generates an HTML diff view and opens it in the default browser.
-// (CSS and overall structure remain the same as the previous corrected version)
 func ShowDiffViewer(original, modified string, contextLines int) {
 	log.Println("Generating enhanced diff view...")
-	diffs, summary := diffutil.GenerateDiffAndSummary(original, modified)
+	lines, summary := diffutil.GenerateDiffAndSummary(original, modified)
 
 	// Use provided contextLines (or default if <= 0)
 	if contextLines <= 0 {
 		contextLines = 3 // Fallback to default
 	}
-	renderedHtmlDiffContent := renderUnifiedDiffHtml(diffs, contextLines)
+	renderedHtmlDiffContent := renderInlineDiffHtml(lines, contextLines)
 
-	// HTML structure and CSS remain the same as the previous successful unified diff attempt
 	htmlContent := `
 <!DOCTYPE html>
 <html lang="en">
@@ -159,99 +213,186 @@ func ShowDiffViewer(original, modified string, contextLines int) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Clipboard Change Details</title>
     <style>
+        * {
+            box-sizing: border-box;
+        }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            margin: 15px;
-            background-color: #f8f9fa;
-            color: #212529;
+            margin: 20px;
+            background-color: #f5f5f5;
+            color: #24292e;
             line-height: 1.5;
         }
         h1, h2 {
-            border-bottom: 1px solid #dee2e6;
-            padding-bottom: 8px;
-            color: #0d6efd; /* Bootstrap blue */
-            margin-top: 20px;
-            margin-bottom: 15px;
+            border-bottom: 2px solid #e1e4e8;
+            padding-bottom: 10px;
+            color: #0366d6;
+            margin-top: 24px;
+            margin-bottom: 16px;
         }
         pre.summary {
-            background-color: #e9ecef;
-            border: 1px solid #ced4da;
-            padding: 10px 15px;
+            background-color: #f6f8fa;
+            border: 1px solid #d1d5da;
+            padding: 16px;
             overflow-x: auto;
             white-space: pre-wrap;
             word-wrap: break-word;
-            font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 0.875em;
-            line-height: 1.5;
-            border-radius: 4px;
-            margin-bottom: 20px;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Monaco, "Courier New", monospace;
+            font-size: 13px;
+            line-height: 1.45;
+            border-radius: 6px;
+            margin-bottom: 24px;
         }
-        pre.diff-output {
-            font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 0.9em;
-            line-height: 1.4; /* Adjust line height for pre */
-            border: 1px solid #dee2e6;
-            background-color: #fff;
-            padding: 10px;
-            border-radius: 4px;
-            overflow-x: auto; /* Add horizontal scroll if needed */
-            white-space: pre; /* Important for unified diff */
+        .diff-container {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Monaco, "Courier New", monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            border: 1px solid #d1d5da;
+            background-color: #ffffff;
+            border-radius: 6px;
+            overflow: hidden;
         }
         .line {
-            display: flex; /* Arrange spans horizontally */
-            min-height: 1.4em; /* Ensure lines have height even if empty */
+            display: flex;
+            align-items: stretch;
+            min-height: 20px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .line:last-child {
+            border-bottom: none;
         }
         .line-num {
             display: inline-block;
-            width: 35px; /* Width for line numbers */
-            padding-right: 10px;
+            width: 50px;
+            padding: 2px 10px;
             text-align: right;
-            color: #6c757d; /* Grey */
-            user-select: none; /* Prevent selecting line numbers */
-            flex-shrink: 0; /* Don't shrink line number columns */
+            color: #57606a;
+            background-color: #f6f8fa;
+            border-right: 1px solid #d1d5da;
+            user-select: none;
+            flex-shrink: 0;
+            font-weight: 400;
+        }
+        .line-num.orig-num {
+            border-right: none;
+        }
+        .line-num.mod-num {
+            border-right: 1px solid #d1d5da;
         }
         .line-op {
-             display: inline-block;
-             width: 15px; /* Width for +/- indicator */
-             text-align: center;
-             color: #6c757d;
-             user-select: none;
-             font-weight: bold;
-             flex-shrink: 0;
-             margin-right: 10px;
+            display: inline-block;
+            width: 20px;
+            text-align: center;
+            color: #57606a;
+            user-select: none;
+            font-weight: bold;
+            flex-shrink: 0;
+            padding: 2px 5px;
+            background-color: #f6f8fa;
+            border-right: 1px solid #d1d5da;
         }
         .line-content {
             display: inline-block;
-            white-space: pre-wrap; /* Allow content wrapping */
-            word-break: break-all; /* Break long words if needed */
-            flex-grow: 1; /* Allow content to take remaining space */
+            padding: 2px 10px;
+            white-space: pre;
+            flex-grow: 1;
+            overflow-x: auto;
         }
 
-        /* Line type specific styling */
-        .line.diff-insert { background-color: #e6ffed; }
-        .line.diff-insert .line-op { color: #198754; } /* Green op */
-        .line.diff-insert .line-content { color: #198754; } /* Green text */
+        /* Line type styling */
+        .line.diff-insert {
+            background-color: #e6ffec;
+        }
+        .line.diff-insert .line-op {
+            color: #22863a;
+            background-color: #cdffd8;
+        }
+        .line.diff-insert .line-num {
+            background-color: #cdffd8;
+        }
 
-        .line.diff-delete { background-color: #ffeef0; }
-        .line.diff-delete .line-op { color: #dc3545; } /* Red op */
-        .line.diff-delete .line-content { color: #dc3545; text-decoration: line-through; } /* Red text */
+        .line.diff-delete {
+            background-color: #ffebe9;
+        }
+        .line.diff-delete .line-op {
+            color: #cb2431;
+            background-color: #ffdce0;
+        }
+        .line.diff-delete .line-num {
+            background-color: #ffdce0;
+        }
 
-        .line.diff-equal .line-content { color: #495057; } /* Dark grey */
+        .line.diff-modified {
+            background-color: #fff8c5;
+        }
+        .line.diff-modified .line-op {
+            color: #735c0f;
+            background-color: #fffbdd;
+        }
+        .line.diff-modified .line-num {
+            background-color: #fffbdd;
+        }
 
+        .line.diff-equal {
+            background-color: #ffffff;
+        }
+
+        /* Character-level highlighting */
+        .char-delete {
+            background-color: #ffdce0;
+            color: #cb2431;
+            font-weight: 600;
+            text-decoration: line-through;
+        }
+        .char-insert {
+            background-color: #acf2bd;
+            color: #22863a;
+            font-weight: 600;
+        }
+
+        /* Foldable sections */
         .line.foldable {
-            background-color: #e9ecef;
-            justify-content: center; /* Center the "..." */
-            color: #6c757d;
+            background-color: #f6f8fa;
+            border: 1px solid #d1d5da;
+            cursor: pointer;
             font-style: italic;
-            min-height: 1.8em;
-            align-items: center;
+            color: #57606a;
+            transition: background-color 0.2s;
         }
-        .line.foldable .line-num, .line.foldable .line-op {
-             display: none; /* Hide numbers/op on folded line */
+        .line.foldable:hover {
+            background-color: #e1e4e8;
         }
-         .line.foldable .line-content{
+        .line.foldable .line-num {
+            background-color: transparent;
+            border-right: 1px solid #d1d5da;
+        }
+        .line.foldable .line-op {
+            background-color: transparent;
+            color: #57606a;
+            border-right: 1px solid #d1d5da;
+        }
+        .fold-indicator {
             text-align: center;
-            flex-grow: 1; /* Make sure content takes full width */
+            flex-grow: 1;
+        }
+        .fold-text {
+            font-size: 11px;
+            color: #0366d6;
+        }
+        .fold-content {
+            display: none;
+        }
+        .line.foldable.collapsed + .fold-content {
+            display: none;
+        }
+        .line.foldable:not(.collapsed) + .fold-content {
+            display: block;
+        }
+        .line.foldable.collapsed .fold-text::after {
+            content: " ▶";
+        }
+        .line.foldable:not(.collapsed) .fold-text::after {
+            content: " ▼";
         }
     </style>
 </head>
@@ -266,10 +407,10 @@ func ShowDiffViewer(original, modified string, contextLines int) {
 `
 	fullHtml := fmt.Sprintf(htmlContent,
 		html.EscapeString(summary),
-		renderedHtmlDiffContent, // Insert the generated diff content
+		renderedHtmlDiffContent,
 	)
 
-	// --- File creation and opening logic (remains the same) ---
+	// Create temporary file and open in browser
 	tmpFile, err := os.CreateTemp("", "clipdiff-*.html")
 	if err != nil {
 		errMsg := fmt.Sprintf("Could not create temporary file. Error: %v", err)
@@ -303,6 +444,8 @@ func ShowDiffViewer(original, modified string, contextLines int) {
 		log.Printf("Error opening diff view in browser: %v", err)
 		ShowAdminNotification(LevelWarn, "Diff View Error", errMsg)
 	}
+
+	// Clean up temporary file after 1 minute
 	go func(pathToDelete string) {
 		defer func() {
 			if r := recover(); r != nil {
